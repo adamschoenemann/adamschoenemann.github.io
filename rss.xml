@@ -1,0 +1,557 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>Adam Schønemann</title>
+        <link>http://adamschoenemann.dk</link>
+        <description><![CDATA[A feed of blog posts from Adam Schønemann]]></description>
+        <atom:link href="http://adamschoenemann.dk/rss.xml" rel="self"
+                   type="application/rss+xml" />
+        <lastBuildDate>Tue, 12 Feb 2019 00:00:00 UT</lastBuildDate>
+        <item>
+    <title>Trampolines</title>
+    <link>http://adamschoenemann.dk/posts/2019-02-12-trampolines.html</link>
+    <description><![CDATA[<article>
+    <section class="header">
+        Posted on February 12, 2019
+        
+    </section>
+    <section>
+        <p>This post will <em>not</em> be about Haskell but rather focus on Kotlin. <a href="http://deondigital.com/">My dayjob</a> is half Haskell half Kotlin (and a tiny bit of Typescript) so I frequently have to write Kotlin code. Kotlin is certainly no Haskell but it does adress <em>some</em> of the <em>worst</em> pain points of Java and lets you sort-of write code in a functional style. Even if you’re not familiar with Kotlin but with other “modern” programming languages you should be able to follow along. Also, there is nothing specific to Kotlin in this post that you couldn’t (with relative ease) implement in any other “modern” mainstream programming language. I’ll keep the code as simple and “obvious” as possible. You can find a <a href="https://kotlinlang.org/docs/reference/basic-syntax.html">quick overview of the Kotlin syntax</a> here.</p>
+<p>Many algorithms are most naturally expressed using recursion, but the JVM is just not very good at this since it quickly runs out of stack frames. You can of course always increase the JVM stack size but this hampers the portability and safety of the code when deployed.</p>
+<p>A special case of recursion is called <strong>tail-recursion</strong>. A tail-recursive function has recursive calls <em>only immediately after a return</em>. Or as stated in <a href="https://stackoverflow.com/questions/33923/what-is-tail-recursion">this StackOverflow answer</a>:</p>
+<blockquote>
+<p>… the return value of any given recursive step is the same as the return value of the next recursive call.</p>
+</blockquote>
+<p>For (a contrived) example:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode kotlin"><code class="sourceCode kotlin"><a class="sourceLine" id="cb1-1" data-line-number="1"><span class="kw">fun</span> <span class="fu">countdown</span>(<span class="va">n</span>: <span class="dt">Long</span>): <span class="dt">Long</span> = <span class="cf">if</span> (n &lt;= <span class="dv">0</span>) then n <span class="cf">else</span> countdown(n<span class="dv">-1</span>)</a></code></pre></div>
+<p>Such functions can be optimized into an iterative style through <em>tail-recursion optimization</em>. You can probably imagine in your head how to rewrite <code>countdown</code> above using just a loop, and the same general transformation can be done by a compiler. In fact, Kotlin is capable of tail-recursion optimization but there is not always an easy way to express an algorithm with tail-recursion only. Instead, we can rewrite our recursive code using <strong>trampolines</strong>. <a href="https://en.wikipedia.org/wiki/Trampoline_(computing)">Wikipedia</a> has this to say about trampolines:</p>
+<blockquote>
+<p>… a trampoline is a loop that iteratively invokes thunk-returning functions (continuation-passing style). A single trampoline suffices to express all control transfers of a program; a program so expressed is trampolined, or in trampolined style; converting a program to trampolined style is trampolining. Programmers can use trampolined functions to implement tail-recursive function calls in stack-oriented programming languages.</p>
+</blockquote>
+<p>There are multiple blog posts out there (<a href="https://blog.logrocket.com/using-trampolines-to-manage-large-recursive-loops-in-javascript-d8c9db095ae3">this</a>, <a href="https://www.datchley.name/recursion-tail-calls-and-trampolines/">that</a> and <a href="http://raganwald.com/2013/03/28/trampolines-in-javascript.html">this one</a>) explaining trampolines (typically in Javascript), but what they all fail to mention (as does wikipedia) is that trampolines can in fact <em>also</em> be used to express recursive functions in general, and not <em>only</em> tail-recursive functions. We’ll see how shortly but first an example of trampolining a function.</p>
+<p>It is straightforward to port existing recursive code to trampolined code. For example the factorial function<a href="#fn1" class="footnote-ref" id="fnref1"><sup>1</sup></a>.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode kotlin"><code class="sourceCode kotlin"><a class="sourceLine" id="cb2-1" data-line-number="1"><span class="kw">fun</span> <span class="fu">factorial</span>(<span class="va">n</span>: <span class="dt">Long</span>): <span class="dt">Long</span> = <span class="cf">if</span> (n &lt;= <span class="dv">1</span>) n <span class="cf">else</span> n * factorial(n - <span class="dv">1</span>)</a></code></pre></div>
+<p>Note that it is <em>not</em> tail-recursive, because the last statement in the recursive case is not simply a recursive call but is “guarded” underneath the multiplication.</p>
+<p>We can rewrite <code>factorial</code> with trampolines as such:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode kotlin"><code class="sourceCode kotlin"><a class="sourceLine" id="cb3-1" data-line-number="1"><span class="kw">fun</span> <span class="fu">tfactorial</span>(<span class="va">n</span>: <span class="dt">Long</span>): <span class="dt">Trampoline</span>&lt;<span class="dt">Long</span>&gt; =</a>
+<a class="sourceLine" id="cb3-2" data-line-number="2">        <span class="cf">if</span> (n &lt;= <span class="dv">1</span>) done(n)</a>
+<a class="sourceLine" id="cb3-3" data-line-number="3">        <span class="cf">else</span> delay(<span class="kw">fun</span> () = tfactorial(n - <span class="dv">1</span>)).flatMap(<span class="kw">fun</span> (<span class="va">m</span>) = done(m * n))</a>
+<a class="sourceLine" id="cb3-4" data-line-number="4"></a>
+<a class="sourceLine" id="cb3-5" data-line-number="5"><span class="kw">fun</span> <span class="fu">fact</span>(<span class="va">n</span>: <span class="dt">Long</span>) = tfactorial(n).run()</a></code></pre></div>
+<p>If you’re not familiar with Kotlin, the most foreign syntax for you is probably the anonymous (lambda) functions. The <code>fun () = ...</code> argument to <code>delay</code> introduces an anonymous function<a href="#fn2" class="footnote-ref" id="fnref2"><sup>2</sup></a> that doesn’t depend on its arguments and computes <code>tfactorial(n - 1)</code> thus effectively delaying the execution of the recursive call to <code>tfactorial</code>. The expression <code>fun (m) = done(m * n)</code> binds <code>m</code> to the result of recursive call on which we call <code>flatMap</code>.</p>
+<p>I’ll explain the meaning of the combinators soon, so don’t be scared if it is non-obvious! Note that the structure of the code remains the same as in the un-trampolined version, but we wrap the branches in the appropriate trampoline combinators and use <code>flatMap</code> to use the result of a recursive call.</p>
+<p>The examples we’ve seen so far are rather easy to rewrite in an iterative style. A slightly more involved example is the (inorder) <code>map</code> function defined on (unlabeled) binary trees:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode kotlin"><code class="sourceCode kotlin"><a class="sourceLine" id="cb4-1" data-line-number="1"><span class="kw">fun</span> &lt;<span class="dt">A</span>, <span class="dt">B</span>&gt; <span class="fu">map</span>(<span class="va">tree</span>: <span class="dt">Tree</span>&lt;<span class="va">A</span>&gt;, <span class="va">f</span>: (<span class="dt">A</span>) -&gt; <span class="dt">B</span>): <span class="dt">Tree</span>&lt;<span class="dt">B</span>&gt;  = <span class="cf">when</span> (tree) {</a>
+<a class="sourceLine" id="cb4-2" data-line-number="2">    <span class="kw">is</span> Tree.Leaf -&gt; Tree.Leaf(f(tree.item))</a>
+<a class="sourceLine" id="cb4-3" data-line-number="3">    <span class="kw">is</span> Tree.Node -&gt; {</a>
+<a class="sourceLine" id="cb4-4" data-line-number="4">        <span class="kw">val</span> <span class="va">left</span> = map(tree.left, f)</a>
+<a class="sourceLine" id="cb4-5" data-line-number="5">        <span class="kw">val</span> <span class="va">right</span> = map(tree.right, f)</a>
+<a class="sourceLine" id="cb4-6" data-line-number="6">        Tree.Node(left, right)</a>
+<a class="sourceLine" id="cb4-7" data-line-number="7">    }</a>
+<a class="sourceLine" id="cb4-8" data-line-number="8">}</a></code></pre></div>
+<p>Implementing this without recursion is a bit more difficult. Once you get the trick it’s not too complicated but essentially you’ll have invented a specialized version of a trampoline! The iterative version also lacks the declarative nature of the recursive formulation. With trampolines we can retain the recursive structure of the algorithm while avoiding overflowing the stack.</p>
+<h1 id="stack-based-trampolines">Stack-based trampolines</h1>
+<p>The principle of a trampoline is that instead of expressing the recursion directly in Kotlin we instead build up a data structure that encodes the recursion. Upon evaluation we then manually maintain a stack on which we store the continuations. We use a loop to iterate through the computation without using the JVM’s function stack.</p>
+<p>Before we begin, we need a proper stack data structure. Kotlin’s built-in list is unfortunately terrible for this purpose, so we’ll quickly handroll our own.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode kotlin"><code class="sourceCode kotlin"><a class="sourceLine" id="cb5-1" data-line-number="1"><span class="kw">sealed</span> <span class="kw">class</span> ConsList&lt;<span class="kw">out</span> <span class="dt">A</span>&gt; {</a>
+<a class="sourceLine" id="cb5-2" data-line-number="2">    <span class="kw">object</span> Nil : <span class="dt">ConsList</span>&lt;<span class="dt">Nothing</span>&gt;()</a>
+<a class="sourceLine" id="cb5-3" data-line-number="3">    <span class="kw">data</span> <span class="kw">class</span> Cons&lt;<span class="dt">A</span>&gt;(<span class="kw">val</span> <span class="va">hd</span>: <span class="dt">A</span>, <span class="kw">val</span> <span class="va">tl</span>: <span class="dt">ConsList</span>&lt;<span class="va">A</span>&gt;) : <span class="dt">ConsList</span>&lt;<span class="dt">A</span>&gt;()</a>
+<a class="sourceLine" id="cb5-4" data-line-number="4"></a>
+<a class="sourceLine" id="cb5-5" data-line-number="5">    <span class="kw">fun</span> <span class="fu">unsafeHead</span>(): <span class="dt">A</span> = <span class="cf">when</span> (<span class="kw">this</span>) {</a>
+<a class="sourceLine" id="cb5-6" data-line-number="6">        Nil -&gt; <span class="kw">throw</span> RuntimeException(<span class="st">&quot;unsafeHead: head on empty list&quot;</span>)</a>
+<a class="sourceLine" id="cb5-7" data-line-number="7">        <span class="kw">is</span> Cons -&gt; hd</a>
+<a class="sourceLine" id="cb5-8" data-line-number="8">    }</a>
+<a class="sourceLine" id="cb5-9" data-line-number="9"></a>
+<a class="sourceLine" id="cb5-10" data-line-number="10">    <span class="kw">fun</span> <span class="fu">unsafeTail</span>(): <span class="dt">ConsList</span>&lt;<span class="dt">A</span>&gt; = <span class="cf">when</span> (<span class="kw">this</span>) {</a>
+<a class="sourceLine" id="cb5-11" data-line-number="11">        Nil -&gt; <span class="kw">throw</span> RuntimeException(<span class="st">&quot;unsafeTail: tail on empty list&quot;</span>)</a>
+<a class="sourceLine" id="cb5-12" data-line-number="12">        <span class="kw">is</span> Cons -&gt; tl</a>
+<a class="sourceLine" id="cb5-13" data-line-number="13">    }</a>
+<a class="sourceLine" id="cb5-14" data-line-number="14"></a>
+<a class="sourceLine" id="cb5-15" data-line-number="15">    <span class="kw">val</span> <span class="va">isEmpty</span> <span class="kw">get</span>() = <span class="kw">this</span> <span class="kw">is</span> Cons</a>
+<a class="sourceLine" id="cb5-16" data-line-number="16">}</a>
+<a class="sourceLine" id="cb5-17" data-line-number="17"><span class="kw">val</span> <span class="va">nil</span> = Nil</a>
+<a class="sourceLine" id="cb5-18" data-line-number="18"><span class="kw">infix</span> <span class="kw">fun</span> &lt;<span class="dt">T</span>&gt;<span class="fu">T</span>.<span class="fu">cons</span>(<span class="va">l</span>: <span class="dt">ConsList</span>&lt;<span class="va">T</span>&gt;): <span class="dt">ConsList</span>&lt;<span class="dt">T</span>&gt; = Cons(<span class="kw">this</span>, l)</a></code></pre></div>
+<p>This is just a standard persistent linked list and a helper “infix” function used to extend it at its head.</p>
+<p>A trampoline is built using three combinators:</p>
+<ul>
+<li><code>done</code> encodes a base case in the recursive computation.</li>
+<li><code>delay</code> encodes a recursive call that does not depend on any other recursive calls. It delays the recursive call by placing it under a function with unit domain (that is, a function that just ignores its result, also called a <em>thunk</em> or a <em>suspension</em>).</li>
+<li><code>flatMap</code> lets you continue with the computation after the result of a recursive call.</li>
+</ul>
+<p>I’ve not written down the type signatures, but perhaps you can spot that a trampoline forms a monad! It’s not important but an interesting aside.</p>
+<p>We can encode these combinators in Kotlin as such:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode kotlin"><code class="sourceCode kotlin"><a class="sourceLine" id="cb6-1" data-line-number="1"><span class="kw">sealed</span> <span class="kw">class</span> Trampoline&lt;<span class="kw">out</span> <span class="dt">T</span>&gt; {</a>
+<a class="sourceLine" id="cb6-2" data-line-number="2">    <span class="kw">private</span> <span class="kw">data</span> <span class="kw">class</span> Done&lt;<span class="kw">out</span> <span class="dt">T</span>&gt;(<span class="kw">val</span> <span class="va">t</span>: <span class="dt">T</span>) : <span class="dt">Trampoline</span>&lt;<span class="dt">T</span>&gt;() {}</a>
+<a class="sourceLine" id="cb6-3" data-line-number="3"></a>
+<a class="sourceLine" id="cb6-4" data-line-number="4">    <span class="co">// Delay is a specialization of FlatMap but improves performance</span></a>
+<a class="sourceLine" id="cb6-5" data-line-number="5">    <span class="kw">private</span> <span class="kw">data</span> <span class="kw">class</span> Delay&lt;<span class="kw">out</span> <span class="dt">T</span>&gt;(</a>
+<a class="sourceLine" id="cb6-6" data-line-number="6">      <span class="kw">val</span> <span class="va">suspension</span>: () -&gt; <span class="dt">Trampoline</span>&lt;<span class="va">T</span>&gt;</a>
+<a class="sourceLine" id="cb6-7" data-line-number="7">    ) : <span class="dt">Trampoline</span>&lt;<span class="dt">T</span>&gt;()</a>
+<a class="sourceLine" id="cb6-8" data-line-number="8"></a>
+<a class="sourceLine" id="cb6-9" data-line-number="9">    <span class="kw">private</span> <span class="kw">data</span> <span class="kw">class</span> FlatMap&lt;<span class="dt">T</span>, <span class="kw">out</span> <span class="dt">U</span>&gt;(</a>
+<a class="sourceLine" id="cb6-10" data-line-number="10">      <span class="kw">val</span> <span class="va">waitFor</span>: <span class="dt">Trampoline</span>&lt;<span class="va">T</span>&gt;,</a>
+<a class="sourceLine" id="cb6-11" data-line-number="11">      <span class="kw">val</span> <span class="va">cont</span>: (<span class="dt">T</span>) -&gt; <span class="dt">Trampoline</span>&lt;<span class="va">U</span>&gt;</a>
+<a class="sourceLine" id="cb6-12" data-line-number="12">    ) : <span class="dt">Trampoline</span>&lt;<span class="dt">U</span>&gt;()</a>
+<a class="sourceLine" id="cb6-13" data-line-number="13"></a>
+<a class="sourceLine" id="cb6-14" data-line-number="14">    <span class="kw">fun</span> &lt;<span class="dt">U</span>&gt; <span class="fu">flatMap</span>(<span class="va">to</span>: (<span class="dt">T</span>) -&gt; <span class="dt">Trampoline</span>&lt;<span class="va">U</span>&gt;): <span class="dt">Trampoline</span>&lt;<span class="dt">U</span>&gt; = FlatMap(<span class="kw">this</span>, to)</a>
+<a class="sourceLine" id="cb6-15" data-line-number="15">}</a>
+<a class="sourceLine" id="cb6-16" data-line-number="16"><span class="kw">fun</span> &lt;<span class="dt">T</span>&gt; <span class="fu">done</span>(<span class="va">t</span>: <span class="dt">T</span>): <span class="dt">Trampoline</span>&lt;<span class="dt">T</span>&gt; = Done(t)</a>
+<a class="sourceLine" id="cb6-17" data-line-number="17"><span class="kw">fun</span> &lt;<span class="dt">T</span>&gt; <span class="fu">delay</span>(<span class="va">suspension</span>: () -&gt; <span class="dt">Trampoline</span>&lt;<span class="va">T</span>&gt;): <span class="dt">Trampoline</span>&lt;<span class="dt">T</span>&gt; = Delay(suspension)</a>
+<a class="sourceLine" id="cb6-18" data-line-number="18"><span class="co">// or just FlatMap(done(Unit), { suspension() })</span></a></code></pre></div>
+<p>The <code>Delay</code> constructor is not strictly necessary in terms of expressivity, since it can be encoded in terms of <code>FlatMap</code>. However, it does allow a significant performance improvement since we can avoid allocating a continuation on the stack.</p>
+<aside class="notice">
+The astute reader may note that <code>Done</code> and <code>FlatMap</code> are actually the constructors of the free monad over the functor <code>F[A] = () → A</code>.
+</aside>
+<p>Now we can define how to run a trampolined computation. This is the signature:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode kotlin"><code class="sourceCode kotlin"><a class="sourceLine" id="cb7-1" data-line-number="1"><span class="kw">fun</span> &lt;<span class="dt">T</span>&gt; <span class="fu">run</span>(<span class="va">tramp</span>: <span class="dt">Trampoline</span>&lt;<span class="va">T</span>&gt;): <span class="dt">T</span></a></code></pre></div>
+<p>The backbone of the algorithm is a while loop that runs until the trampoline is <code>Done</code> <em>and</em> there are no continuations left. We keep track of the current result (call it <code>r</code>) which initially is <code>tramp</code>. We’ll define <code>stack</code> to be a list of continuations to be run after a recursive call is <code>done</code>. Now it is a simple matter of inspecting the current result <code>r</code>:</p>
+<ul>
+<li>If <code>r</code> is <code>Done</code> then
+<ul>
+<li>If there are continuations in <code>stack</code> then pop the first one and call it with <code>r.t</code>. Then set <code>stack</code> to be the rest.</li>
+<li>Otherwise we are done and we return the result inside <code>r</code>.</li>
+</ul></li>
+<li>If <code>r</code> is <code>Delay</code> then we force the suspension and set <code>r</code> to be the resulting trampoline.</li>
+<li>If <code>r</code> is <code>FlatMap</code> then we pop <code>r.cont</code> on the continuation stack and set <code>r = r.waitFor</code>.</li>
+</ul>
+<p>Here is the full Kotlin code:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode kotlin"><code class="sourceCode kotlin"><a class="sourceLine" id="cb8-1" data-line-number="1"><span class="kw">fun</span> &lt;<span class="dt">T</span>&gt; <span class="fu">run</span>(<span class="va">tramp</span>: <span class="dt">Trampoline</span>&lt;<span class="va">T</span>&gt;): <span class="dt">T</span> {</a>
+<a class="sourceLine" id="cb8-2" data-line-number="2">    <span class="kw">var</span> <span class="va">r</span> = tramp <span class="kw">as</span> Trampoline&lt;Any&gt;</a>
+<a class="sourceLine" id="cb8-3" data-line-number="3">    <span class="kw">var</span> <span class="va">stack</span>: ConsList&lt;(Any) -&gt; Trampoline&lt;Any&gt;&gt; = nil</a>
+<a class="sourceLine" id="cb8-4" data-line-number="4">    <span class="cf">while</span> (<span class="kw">true</span>) {</a>
+<a class="sourceLine" id="cb8-5" data-line-number="5">        <span class="cf">when</span> (r) {</a>
+<a class="sourceLine" id="cb8-6" data-line-number="6">            <span class="kw">is</span> Done -&gt;</a>
+<a class="sourceLine" id="cb8-7" data-line-number="7">                <span class="cf">if</span> (stack.isEmpty) {</a>
+<a class="sourceLine" id="cb8-8" data-line-number="8">                    <span class="kw">return</span> r.t <span class="kw">as</span> T</a>
+<a class="sourceLine" id="cb8-9" data-line-number="9">                } <span class="cf">else</span> {</a>
+<a class="sourceLine" id="cb8-10" data-line-number="10">                    r = stack.unsafeHead()(r.t)</a>
+<a class="sourceLine" id="cb8-11" data-line-number="11">                    stack = stack.unsafeTail()</a>
+<a class="sourceLine" id="cb8-12" data-line-number="12">                }</a>
+<a class="sourceLine" id="cb8-13" data-line-number="13">            <span class="kw">is</span> Delay -&gt; {</a>
+<a class="sourceLine" id="cb8-14" data-line-number="14">                r = r.suspension()</a>
+<a class="sourceLine" id="cb8-15" data-line-number="15">            }</a>
+<a class="sourceLine" id="cb8-16" data-line-number="16">            <span class="kw">is</span> FlatMap&lt;*, *&gt; -&gt; {</a>
+<a class="sourceLine" id="cb8-17" data-line-number="17">                stack = (r.cont <span class="kw">as</span> (Any) -&gt; Trampoline&lt;Any&gt;) cons stack</a>
+<a class="sourceLine" id="cb8-18" data-line-number="18">                r = r.waitFor <span class="kw">as</span> Trampoline&lt;Any&gt;</a>
+<a class="sourceLine" id="cb8-19" data-line-number="19">            }</a>
+<a class="sourceLine" id="cb8-20" data-line-number="20">        }</a>
+<a class="sourceLine" id="cb8-21" data-line-number="21">    }</a>
+<a class="sourceLine" id="cb8-22" data-line-number="22">}</a></code></pre></div>
+<p>Unfortunately we have to subvert Kotlin’s type system in order to implement this, because it lacks heterogenous lists. It is perfectly safe though since a continuation will always be called with a result of the type it expects.</p>
+<p>To show it off on a slightly more complicated example, here is the Fibonacci function:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode kotlin"><code class="sourceCode kotlin"><a class="sourceLine" id="cb9-1" data-line-number="1"><span class="kw">fun</span> <span class="fu">fib</span>(<span class="va">n</span>: <span class="dt">Long</span>): <span class="dt">Trampoline</span>&lt;<span class="dt">Long</span>&gt; =</a>
+<a class="sourceLine" id="cb9-2" data-line-number="2">        <span class="cf">if</span> (n &lt;= <span class="dv">1</span>)</a>
+<a class="sourceLine" id="cb9-3" data-line-number="3">            done(n)</a>
+<a class="sourceLine" id="cb9-4" data-line-number="4">        <span class="cf">else</span> delay (<span class="kw">fun</span> () = fib(n - <span class="dv">1</span>)).flatMap (<span class="kw">fun</span> (<span class="va">n1</span>) =</a>
+<a class="sourceLine" id="cb9-5" data-line-number="5">            fib(n - <span class="dv">2</span>).flatMap(<span class="kw">fun</span> (<span class="va">n2</span>) = done(n1 + n2))</a>
+<a class="sourceLine" id="cb9-6" data-line-number="6">        )</a></code></pre></div>
+<p>If we code-golf it a bit, use Kotlins <a href="https://kotlinlang.org/docs/reference/lambdas.html">lambda notation</a> and add a few helper combinators we can also express it in an “applicative” style:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode kotlin"><code class="sourceCode kotlin"><a class="sourceLine" id="cb10-1" data-line-number="1"><span class="kw">fun</span> <span class="fu">fib2</span>(<span class="va">n</span>: <span class="dt">Long</span>): <span class="dt">Trampoline</span>&lt;<span class="dt">Long</span>&gt; =</a>
+<a class="sourceLine" id="cb10-2" data-line-number="2">        <span class="cf">if</span> (n &lt;= <span class="dv">1</span>)</a>
+<a class="sourceLine" id="cb10-3" data-line-number="3">            done(n)</a>
+<a class="sourceLine" id="cb10-4" data-line-number="4">        <span class="cf">else</span> delay { fib2(n - <span class="dv">1</span>) }.zip(fib2(n - <span class="dv">2</span>)).map { (n1, n2) -&gt; n1 + n2 }</a></code></pre></div>
+<p>That’s it! Trampolined code does not run as fast as natively recursive code of course. <code>FlatMap</code> is the biggest sinner since it requires allocating a continuation on the (heap-allocated) stack. While it may not be super performant, trampolined code is completely guarded against stack-overflow errors! If you can catch <code>StackOverFlowError</code>s (or their equivalent) in your language, you can even run an un-trampolined version first and then resort to the trampolined algorithm if you run out of stack space.</p>
+<p>There are other approaches to implementing trampolines. For example <a href="https://scalaz.github.io/scalaz/scalaz-2.9.1-6.0.4/doc.sxr/scalaz/Free.scala.html">Scalaz</a> directly composes trampolines when <code>flatMap</code>ing and PureScript uses a (much more complicated) technique described in <a href="http://okmij.org/ftp/Haskell/zseq.pdf">Reflection without Remorse</a>. I can’t speak to their performance characteristics compared to the approach I’ve delineated here, and I don’t have the time for a proper comparison. They’re probably faster but this approach wins on simplicity in my opinion.</p>
+<p>Converting normal recursive code to trampolined code is in general not difficiult:</p>
+<ul>
+<li>base cases are wrapped in <code>done</code>.</li>
+<li>recursive calls are wrapped in <code>delay</code>.</li>
+<li>if you need to depend on the result of a recursive call, call <code>flatMap</code> on it and define the rest of your computation in the lambda function.</li>
+</ul>
+<p>As such, we can write our recursive algorithms and then later mechanically trampoline them to get rid of those pesky <code>StackOverflowError</code>s.</p>
+<section class="footnotes">
+<hr />
+<ol>
+<li id="fn1"><p>Of course, the factorial function can be implemented simply and effectively with both loops and tail-recursion but we’ll use its recursive formulation here for expositional purposes.<a href="#fnref1" class="footnote-back">↩</a></p></li>
+<li id="fn2"><p>Kotlin has some much more ergonomic syntax for lambda functions but I felt this was clearer in case the reader is not familiar with Kotlin.<a href="#fnref2" class="footnote-back">↩</a></p></li>
+</ol>
+</section>
+    </section>
+</article>
+]]></description>
+    <pubDate>Tue, 12 Feb 2019 00:00:00 UT</pubDate>
+    <guid>http://adamschoenemann.dk/posts/2019-02-12-trampolines.html</guid>
+    <dc:creator>Adam Schønemann</dc:creator>
+</item>
+<item>
+    <title>Pattern matching ADTs</title>
+    <link>http://adamschoenemann.dk/posts/2018-05-29-pattern-matching.html</link>
+    <description><![CDATA[<article>
+    <section class="header">
+        Posted on May 29, 2018
+        
+    </section>
+    <section>
+        <p>This post is about implementing coverage checking of pattern matches using Haskell. It does not involve any super-advanced type-level trickery, so as long you're somewhat comfortable with monad transformers you should be fine.</p>
+<h2 id="introduction">Introduction</h2>
+<p>Pattern matching coverage on generalized algebraic data types is a complicated problem, and has seen many attempts at a solution in recent years. In contrast, pattern matching on ordinary ADTs is often simply mentioned as a trivial matter and delegated to a footnoote. When I recently had to implement a coverage checking algorithm in a Haskell-like language <em>without</em> GADTs, I found that there was a dearth of information (which was not paywalled) on how to go about such a problem. Specifically, I needed to disallow not only non-exhaustive matches but also redundant matches. Eventually, I devised a solution that is a small modification of a well-known algorithm. I don't expect that there is anything academically novel about my modification, but I do wish that I hadn't spent so much time searching in vain for a ready-made solution. This blog post is my attempt at rectifying this state of affairs for those that come after me!</p>
+<p>When dealing with pattern matching clauses, we can typically encounter two kinds of problems:</p>
+<ul>
+<li><p>The clauses are non-exhaustive; for example</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb1-1" data-line-number="1"><span class="kw">case</span> xs <span class="kw">of</span></a>
+<a class="sourceLine" id="cb1-2" data-line-number="2">  [] <span class="ot">-&gt;</span> <span class="fu">...</span></a></code></pre></div>
+In this example, we have clearly not dealt with the case where <code>xs</code> is a cons constructed list. If we accept such a match we can introduce divergence into our language very easily.</li>
+<li><p>There are one or more redundant clauses; for example</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb2-1" data-line-number="1"><span class="kw">case</span> xs <span class="kw">of</span></a>
+<a class="sourceLine" id="cb2-2" data-line-number="2">  [] <span class="ot">-&gt;</span> <span class="fu">...</span></a>
+<a class="sourceLine" id="cb2-3" data-line-number="3">  x <span class="fu">:</span> xs&#39; <span class="ot">-&gt;</span> <span class="fu">...</span></a>
+<a class="sourceLine" id="cb2-4" data-line-number="4">  xs&#39; <span class="ot">-&gt;</span> <span class="fu">...</span></a></code></pre></div>
+<p>In this example, the last branch is essentially dead code, as it will never be reached.</p></li>
+</ul>
+<p>The only information I could find on the internet on coverage checking was Conor McBride's <a href="https://stackoverflow.com/questions/7883023/algorithm-for-type-checking-ml-like-pattern-matching">great StackOverflow answer</a> which explains the core idea <a href="https://dl.acm.org/citation.cfm?id=5303">behind Lennart Augustsson's technique for compiling pattern matches</a>. I also found a kindred spirit in Tim Humphries who had encountered the same lack of information and devised <a href="https://teh.id.au/posts/2017/03/10/simple-exhaustivity/index.html">an algorithm using tries</a>.</p>
+<p>The problem was that I could not get McBride's explanation to account for <em>redundant pattern matches</em>. McBride explains how to use the algorithm to flag <em>overlapping patterns</em>, but this is too strong a requirement. For example,</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb3-1" data-line-number="1"><span class="kw">case</span> xs <span class="kw">of</span></a>
+<a class="sourceLine" id="cb3-2" data-line-number="2">  [] <span class="ot">-&gt;</span> <span class="fu">...</span></a>
+<a class="sourceLine" id="cb3-3" data-line-number="3">  xs&#39; <span class="ot">-&gt;</span> <span class="fu">...</span></a></code></pre></div>
+<p>would be flagged as an issue, since <code>xs'</code> strictly overlaps with <code>[]</code>. But this is rarely what we want since we often use catch-all patterns for convenience.</p>
+<p>While I only took a cursory look at Tim Humphries' implementation, it did not appear to make any attempt at checking anything beyond exhaustivity, so I could not steal his code shamelessly either.</p>
+<p>After pouring over McBride's explanation for many hours, I eventually discovered how to modify it to suit my needs by introducing just a tiny bit of extra state.</p>
+<h2 id="the-language">The language</h2>
+<p>With that out of the way, let us start modeling our problem in Haskell.</p>
+<p>Since this is a literate Haskell file, we'll kick things off with some obligatory language extensions and imports.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb4-1" data-line-number="1"><span class="ot">{-# LANGUAGE GeneralizedNewtypeDeriving #-}</span></a>
+<a class="sourceLine" id="cb4-2" data-line-number="2"><span class="ot">{-# LANGUAGE FlexibleContexts #-}</span></a>
+<a class="sourceLine" id="cb4-3" data-line-number="3"><span class="ot">{-# LANGUAGE LambdaCase #-}</span></a>
+<a class="sourceLine" id="cb4-4" data-line-number="4"><span class="ot">{-# LANGUAGE ScopedTypeVariables #-}</span></a>
+<a class="sourceLine" id="cb4-5" data-line-number="5"><span class="ot">{-# LANGUAGE BangPatterns #-}</span></a>
+<a class="sourceLine" id="cb4-6" data-line-number="6"></a>
+<a class="sourceLine" id="cb4-7" data-line-number="7"><span class="kw">import</span> <span class="dt">Control.Monad.Except</span> (<span class="dt">ExceptT</span>, runExceptT, <span class="dt">MonadError</span>, throwError)</a>
+<a class="sourceLine" id="cb4-8" data-line-number="8"><span class="kw">import</span> <span class="dt">Control.Monad.State</span> (<span class="dt">StateT</span>, runStateT, <span class="dt">MonadState</span>, get, modify)</a>
+<a class="sourceLine" id="cb4-9" data-line-number="9"><span class="kw">import</span> <span class="dt">Control.Monad.Reader</span> (<span class="dt">Reader</span>, runReader, <span class="dt">MonadReader</span>, asks, local)</a>
+<a class="sourceLine" id="cb4-10" data-line-number="10"><span class="kw">import</span> <span class="dt">Data.Foldable</span> (foldlM)</a>
+<a class="sourceLine" id="cb4-11" data-line-number="11"><span class="kw">import</span> <span class="dt">Control.Monad</span> (replicateM)</a>
+<a class="sourceLine" id="cb4-12" data-line-number="12"><span class="kw">import</span> <span class="dt">Data.Maybe</span> (catMaybes)</a></code></pre></div>
+<p>None of these extensions or imports should worry you right now.</p>
+<p>We need to define the language of types and patterns we'll be working on. Lets keep it simple.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb5-1" data-line-number="1"><span class="kw">data</span> <span class="dt">Type</span> </a>
+<a class="sourceLine" id="cb5-2" data-line-number="2">  <span class="fu">=</span> <span class="dt">TConstr</span> <span class="dt">String</span></a>
+<a class="sourceLine" id="cb5-3" data-line-number="3">  <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Show</span>)</a>
+<a class="sourceLine" id="cb5-4" data-line-number="4"></a>
+<a class="sourceLine" id="cb5-5" data-line-number="5"><span class="kw">data</span> <span class="dt">Pattern</span> ident</a>
+<a class="sourceLine" id="cb5-6" data-line-number="6">  <span class="fu">=</span> <span class="dt">PBind</span> ident</a>
+<a class="sourceLine" id="cb5-7" data-line-number="7">  <span class="fu">|</span> <span class="dt">PMatch</span> <span class="dt">String</span> [<span class="dt">Pattern</span> ident]</a>
+<a class="sourceLine" id="cb5-8" data-line-number="8">  <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Show</span>)</a></code></pre></div>
+<p>Types are just an open set of nullary type constructors. So for example <code>Unit</code> or <code>Boolean</code> or <code>IntList</code>. Our language does not have polymorphism, but the algorithm will work fine with a bit of extra machinery for polymorphic types as well (<a href="https://github.com/adamschoenemann/clofrp/blob/master/library/CloFRP/Check/Coverage.hs">demonstration</a>).</p>
+<p>Patterns are only slightly more complicated. A pattern can <em>bind</em> a value or it can <em>match</em> (destructure) a value. As an example, the clauses in</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb6-1" data-line-number="1"><span class="kw">case</span> xs <span class="kw">of</span></a>
+<a class="sourceLine" id="cb6-2" data-line-number="2">  <span class="dt">Cons</span> x xs&#39; <span class="ot">-&gt;</span> <span class="fu">...</span></a>
+<a class="sourceLine" id="cb6-3" data-line-number="3">  xs&#39; <span class="ot">-&gt;</span> <span class="fu">...</span></a></code></pre></div>
+<p>would be encoded as</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb7-1" data-line-number="1">[ <span class="dt">PMatch</span> <span class="st">&quot;Cons&quot;</span> [<span class="dt">PBind</span> <span class="st">&quot;x&quot;</span>, <span class="dt">PBind</span> <span class="st">&quot;xs&#39;&quot;</span>]</a>
+<a class="sourceLine" id="cb7-2" data-line-number="2">, <span class="dt">PBind</span> <span class="st">&quot;xs&quot;</span></a>
+<a class="sourceLine" id="cb7-3" data-line-number="3">]</a></code></pre></div>
+<p>We'll refrain from use infix pattern-operators like <code>(:)</code> and instead use their &quot;ordinary&quot; prefix-form names (e.g. <code>Cons</code> for <code>(:)</code>) just to simplify our implementation and presentation.</p>
+<p>You'll notice that <code>Pattern</code> is parameterized over <code>ident</code>. We use this to distinguish patterns with user-given names and fresh machine-generated names.</p>
+<h2 id="an-initial-algorithm">An initial algorithm</h2>
+<p>Disclaimer: just to be absolutely clear, this algorithm is mostly due to <a href="https://dl.acm.org/citation.cfm?id=5303">Augustsson</a> and just a small extension of the outline provided by <a href="https://stackoverflow.com/questions/7883023/algorithm-for-type-checking-ml-like-pattern-matching">Conor McBride's StackOverflow answer</a>. I don't pretend to have invented anything novel.</p>
+<p>Here is a sketch of how the algorithm works.</p>
+
+<p>The expression <span class="math inline">\(q\, \mathsf{coveredBy}\, ρ\)</span> checks if an &quot;ideal pattern&quot; <span class="math inline">\(q\)</span> is covered by a list of actual patterns <span class="math inline">\(ρ\)</span>. The ideal pattern starts off being a simple name-binding pattern, and is further refined when needed through the algorithm.</p>
+<ul>
+<li>If <span class="math inline">\(ρ\)</span> is the empty list, then we cannot cover <span class="math inline">\(q\)</span> and the match is not exhaustive.</li>
+<li>If there is a substitution of variables <span class="math inline">\(υ\)</span> in <span class="math inline">\(q\)</span> such that <span class="math inline">\(υ\, q\)</span> (<span class="math inline">\(υ\)</span> applied to <span class="math inline">\(q\)</span>) equals <span class="math inline">\(\mathsf{head}(ρ)\)</span> then:
+<ul>
+<li>If the substitution <span class="math inline">\(υ\)</span> is an <em>injective renaming of variables</em>, then we know that <span class="math inline">\(q\)</span> is fully covered by <span class="math inline">\(\mathsf{head}(ρ)\)</span>. Such a substitution only maps variables to variables.</li>
+<li>Otherwise, then there is a mapping in <span class="math inline">\(υ\)</span> that maps a variable <span class="math inline">\(x_1\)</span> to a constructor. For each constructor <span class="math inline">\(c_i\)</span> of <span class="math inline">\(x_1\)</span>'s type, apply the substitution <span class="math inline">\(\left[x_1 ↦ c_i\right]\)</span> to <span class="math inline">\(q\)</span> giving <span class="math inline">\(q&#39;\)</span>, and solve <span class="math inline">\(q&#39;\, \mathsf{coveredBy}\, ρ\)</span>.</li>
+</ul></li>
+<li>If no such substitution exists, then <span class="math inline">\(q\)</span> cannot be covered by <span class="math inline">\(\mathsf{head}(ρ)\)</span> and so we recurse with <span class="math inline">\(q\, \mathsf{coveredBy}\, \mathsf{tail}(ρ)\)</span>.</li>
+</ul>
+<h1 id="an-example">An example</h1>
+<p>The algorithm above will not detect redundant patterns, but before we extend it to do so, let us see an example:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb8-1" data-line-number="1"><span class="kw">case</span> xs <span class="kw">of</span> </a>
+<a class="sourceLine" id="cb8-2" data-line-number="2">  <span class="dt">Nil</span> <span class="ot">-&gt;</span> <span class="fu">...</span></a>
+<a class="sourceLine" id="cb8-3" data-line-number="3">  <span class="dt">Cons</span> x&#39; xs&#39; <span class="ot">-&gt;</span> <span class="fu">...</span></a></code></pre></div>
+<p>This gives the problem <code>xs coveredBy [Nil, Cons x' xs']</code></p>
+<p>We start comparing <code>xs</code> to <code>Nil</code>. There is a valid substitution <span class="math inline">\(υ\)</span>, namely <code>[xs ↦ Nil]</code>. Since <code>Nil</code> is not a variable, <span class="math inline">\(υ\)</span> is not injective, so we have to &quot;split&quot; on <code>xs</code> with each list constructor, giving us problems:</p>
+<pre><code>Nil coveredBy [Nil, Cons x&#39; xs&#39;]
+Cons a´ b´ coveredBy [Nil, Cons x&#39; xs&#39;]</code></pre>
+<p>Here, <code>a´</code> and <code>b´</code> are fresh names, so we postfix them with a tick for clarity.</p>
+<p>The first sub-problem has a solution of the empty substitution (which is injective) so we can discharge that. The second sub-problem will first try to find a substitution to unify <code>Cons a´ b´</code> and <code>Nil</code>, but no such substitution exists, so we'll discard <code>Nil</code> and move on to the next pattern.</p>
+<pre><code>Cons a´ b´ coveredBy [Cons x&#39; xs&#39;]</code></pre>
+<p>There is an obvious injective substitution, namely <code>[a´ ↦ x', b´ ↦ xs']</code>, and the algorithm terminates with success.</p>
+<h2 id="redundant-patterns">Redundant patterns</h2>
+<p>In McBride's answer, he shows how to detect any <em>overlapping</em> patterns. Whenever we discharge a case through an injective substitution, we can check that there are no other covering patterns in our list. To use his example:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb11-1" data-line-number="1"><span class="kw">case</span> xs <span class="kw">of</span></a>
+<a class="sourceLine" id="cb11-2" data-line-number="2">  <span class="dt">Nil</span> <span class="ot">-&gt;</span> <span class="fu">...</span></a>
+<a class="sourceLine" id="cb11-3" data-line-number="3">  ys <span class="ot">-&gt;</span> <span class="fu">...</span></a></code></pre></div>
+<pre><code>xs coveredBy [Nil, ys]
+  Nil coveredBy [Nil, ys] &lt;-- overlap with ys
+  Cons a´ b´ coveredBy [Nil, ys]</code></pre>
+<p>But this is not what we really want, since we want to permit catch-all patterns. My solution was to simply keep track of how many times a clause was used to discharge an ideal pattern, and then check that every clause was used at least once after the algorithm terminated. Using this scheme, the example above would be permitted, whereas</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb13-1" data-line-number="1"><span class="kw">case</span> xs <span class="kw">of</span> </a>
+<a class="sourceLine" id="cb13-2" data-line-number="2">  <span class="dt">Nil</span> <span class="ot">-&gt;</span> <span class="fu">...</span></a>
+<a class="sourceLine" id="cb13-3" data-line-number="3">  <span class="dt">Cons</span> x&#39; xs&#39; <span class="ot">-&gt;</span> <span class="fu">...</span></a>
+<a class="sourceLine" id="cb13-4" data-line-number="4">  ys <span class="ot">-&gt;</span> <span class="fu">...</span> </a></code></pre></div>
+<p>would be flagged, since the last clause is redundant.</p>
+<p>Now that we've extended the original algorithm a bit and we have a better understanding of the problem, we can try to write a more detailed algorithm in pseudo-Haskell before proceeding to the implementation.</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb14-1" data-line-number="1"><span class="ot">checkCoverage ::</span> <span class="dt">IdealPattern</span> <span class="ot">-&gt;</span> <span class="dt">List</span> <span class="kw">of</span> <span class="dt">Clauses</span> <span class="ot">-&gt;</span> <span class="dt">Success</span> or <span class="dt">Failure</span></a>
+<a class="sourceLine" id="cb14-2" data-line-number="2">checkCoverage q ρ <span class="fu">=</span></a>
+<a class="sourceLine" id="cb14-3" data-line-number="3">  <span class="kw">if</span> q <span class="ot">`coveredBy`</span> ρ</a>
+<a class="sourceLine" id="cb14-4" data-line-number="4">    <span class="kw">then</span> <span class="kw">if</span> any ρᵢ was not used return <span class="dt">Failure</span> (ρᵢ is redundant)</a>
+<a class="sourceLine" id="cb14-5" data-line-number="5">    <span class="kw">else</span> <span class="dt">Success</span></a>
+<a class="sourceLine" id="cb14-6" data-line-number="6">  </a>
+<a class="sourceLine" id="cb14-7" data-line-number="7"><span class="ot">coveredBy ::</span> <span class="dt">IdealPattern</span> <span class="ot">-&gt;</span> <span class="dt">List</span> <span class="kw">of</span> <span class="dt">Clauses</span> <span class="ot">-&gt;</span> <span class="dt">Success</span> or <span class="dt">Failure</span></a>
+<a class="sourceLine" id="cb14-8" data-line-number="8">q <span class="ot">`coveredBy`</span> ρ <span class="fu">=</span></a>
+<a class="sourceLine" id="cb14-9" data-line-number="9">  <span class="kw">if</span> ρ is the empty list</a>
+<a class="sourceLine" id="cb14-10" data-line-number="10">    <span class="kw">then</span> <span class="dt">Failure</span> (q is not covered<span class="fu">!</span>)</a>
+<a class="sourceLine" id="cb14-11" data-line-number="11">  <span class="kw">else</span> </a>
+<a class="sourceLine" id="cb14-12" data-line-number="12">    <span class="kw">let</span> υ <span class="fu">=</span> a substitution such that υ q <span class="fu">=</span> (head ρ)   or  nothing</a>
+<a class="sourceLine" id="cb14-13" data-line-number="13">    <span class="kw">if</span> υ is nothing</a>
+<a class="sourceLine" id="cb14-14" data-line-number="14">      <span class="kw">then</span> q <span class="ot">`coveredBy`</span> (tail ρ)</a>
+<a class="sourceLine" id="cb14-15" data-line-number="15">    <span class="kw">else</span> </a>
+<a class="sourceLine" id="cb14-16" data-line-number="16">      <span class="kw">if</span> υ is injective </a>
+<a class="sourceLine" id="cb14-17" data-line-number="17">        <span class="kw">then</span> increment the usages <span class="kw">of</span> (head ρ) with <span class="dv">1</span></a>
+<a class="sourceLine" id="cb14-18" data-line-number="18">        <span class="kw">else</span> </a>
+<a class="sourceLine" id="cb14-19" data-line-number="19">          <span class="kw">let</span> x <span class="fu">=</span> the variable <span class="kw">in</span> q that must map to some constructor</a>
+<a class="sourceLine" id="cb14-20" data-line-number="20">          <span class="kw">let</span> τ <span class="fu">=</span> typeOf x</a>
+<a class="sourceLine" id="cb14-21" data-line-number="21">          for each c <span class="kw">in</span> (constructorsOf τ)</a>
+<a class="sourceLine" id="cb14-22" data-line-number="22">            <span class="kw">let</span> q&#39; <span class="fu">=</span> q with x substituted for c</a>
+<a class="sourceLine" id="cb14-23" data-line-number="23">            q&#39; <span class="ot">`coveredBy`</span> ρ</a></code></pre></div>
+<h2 id="implementation">Implementation</h2>
+<p>We'll start by formalizing some of the concepts used in the pseudo-code algorithm.</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb15-1" data-line-number="1"><span class="kw">type</span> <span class="dt">Name</span> <span class="fu">=</span> <span class="dt">String</span></a>
+<a class="sourceLine" id="cb15-2" data-line-number="2"><span class="kw">type</span> <span class="dt">ClausePattern</span> <span class="fu">=</span> <span class="dt">Pattern</span> <span class="dt">Name</span></a>
+<a class="sourceLine" id="cb15-3" data-line-number="3"><span class="kw">type</span> <span class="dt">FreshName</span> <span class="fu">=</span> <span class="dt">Integer</span></a>
+<a class="sourceLine" id="cb15-4" data-line-number="4"><span class="kw">type</span> <span class="dt">IdealPattern</span> <span class="fu">=</span> <span class="dt">Pattern</span> <span class="dt">FreshName</span></a></code></pre></div>
+<p>These type synonyms will just make our code a bit more readable. We'll also need to fetch the constructors for a type at some point, so let's define those:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb16-1" data-line-number="1"><span class="kw">data</span> <span class="dt">Constructor</span> <span class="fu">=</span> <span class="dt">Constructor</span> <span class="dt">Name</span> [<span class="dt">Type</span>]</a></code></pre></div>
+<p>For example, the constructors of <code>IntList</code> are <code>Constructor &quot;Nil&quot; []</code> and <code>Constructor &quot;Cons&quot; [TConstr &quot;Int&quot;, TConstr &quot;IntList&quot;]</code>.</p>
+<p>The pseudo-code mentions substitutions, so lets define what a substitution actually is.</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb17-1" data-line-number="1"><span class="kw">newtype</span> <span class="dt">Subst</span> ident <span class="fu">=</span> <span class="dt">Subst</span> {<span class="ot"> unSubst ::</span> [(<span class="dt">FreshName</span>, <span class="dt">Pattern</span> ident)] }</a>
+<a class="sourceLine" id="cb17-2" data-line-number="2">  <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Show</span>, <span class="dt">Monoid</span>)</a></code></pre></div>
+<p>We'll just use a newtype wrapper around an associative list. A more efficient implementation would of course be a <code>Map</code>, but for now let's keep things simple. Note that the domain of the substitution will alwas be <code>FreshName</code> since we never touch the patterns that the user has defined.</p>
+<p>Using structural recursion over <code>Pattern</code> we can apply a substitution to a pattern, giving us a new pattern.</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb18-1" data-line-number="1"><span class="ot">apply ::</span> <span class="dt">Subst</span> <span class="dt">FreshName</span> <span class="ot">-&gt;</span> <span class="dt">Pattern</span> <span class="dt">FreshName</span> <span class="ot">-&gt;</span> <span class="dt">Pattern</span> <span class="dt">FreshName</span></a>
+<a class="sourceLine" id="cb18-2" data-line-number="2">apply (<span class="dt">Subst</span> assocs) <span class="fu">=</span> go <span class="kw">where</span></a>
+<a class="sourceLine" id="cb18-3" data-line-number="3">  go (<span class="dt">PBind</span> i) </a>
+<a class="sourceLine" id="cb18-4" data-line-number="4">    <span class="fu">|</span> <span class="dt">Just</span> pat&#39; <span class="ot">&lt;-</span> lookup i assocs <span class="fu">=</span> pat&#39;</a>
+<a class="sourceLine" id="cb18-5" data-line-number="5">    <span class="fu">|</span> otherwise                    <span class="fu">=</span> <span class="dt">PBind</span> i</a>
+<a class="sourceLine" id="cb18-6" data-line-number="6">  go (<span class="dt">PMatch</span> nm subpats) <span class="fu">=</span></a>
+<a class="sourceLine" id="cb18-7" data-line-number="7">    <span class="dt">PMatch</span> nm (map go subpats)</a></code></pre></div>
+<p>We'll also need to know if a substitution is injective. We'll use a new data type to represent this.</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb19-1" data-line-number="1"><span class="kw">data</span> <span class="dt">IsInjectiveResult</span></a>
+<a class="sourceLine" id="cb19-2" data-line-number="2">  <span class="fu">=</span> <span class="dt">Injective</span></a>
+<a class="sourceLine" id="cb19-3" data-line-number="3">  <span class="fu">|</span> <span class="dt">NotInjective</span> <span class="dt">FreshName</span></a>
+<a class="sourceLine" id="cb19-4" data-line-number="4">  <span class="kw">deriving</span> (<span class="dt">Show</span>, <span class="dt">Eq</span>)</a></code></pre></div>
+<p>A substitution is either injective, or not-injective due to a binding. This data type is isomorphic to <code>Maybe</code> but <code>Maybe</code>'s established semantics do not fit very well to this problem, we we'll use our own data type.</p>
+<p>We can easily establish whether a substitution is injective by recursing over the list it wraps.</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb20-1" data-line-number="1"><span class="ot">isInjective ::</span> <span class="dt">Subst</span> ident <span class="ot">-&gt;</span> <span class="dt">IsInjectiveResult</span></a>
+<a class="sourceLine" id="cb20-2" data-line-number="2">isInjective (<span class="dt">Subst</span> xs) <span class="fu">=</span> go xs <span class="kw">where</span></a>
+<a class="sourceLine" id="cb20-3" data-line-number="3">  go [] <span class="fu">=</span> <span class="dt">Injective</span></a>
+<a class="sourceLine" id="cb20-4" data-line-number="4">  go ((b, p) <span class="fu">:</span> xs&#39;) <span class="fu">=</span></a>
+<a class="sourceLine" id="cb20-5" data-line-number="5">    <span class="kw">case</span> p <span class="kw">of</span></a>
+<a class="sourceLine" id="cb20-6" data-line-number="6">    <span class="dt">PBind</span> _    <span class="ot">-&gt;</span> go xs&#39;</a>
+<a class="sourceLine" id="cb20-7" data-line-number="7">    <span class="dt">PMatch</span> _ _ <span class="ot">-&gt;</span> <span class="dt">NotInjective</span> b</a></code></pre></div>
+<p>If we look at the pseudo-Haskell algorithm, we can identify some helper functions that we will most definitely need. We can also see that the computation must be able to fail in a few different ways. Seems like we'll need a monad! We can create a type class that allows us to abstract over the exact representation of our computation, which will force us to stay at the domain-level when we're writing the implementation.</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb21-1" data-line-number="1"><span class="kw">class</span> <span class="dt">Monad</span> m <span class="ot">=&gt;</span> <span class="dt">Coverage</span> m <span class="kw">where</span></a>
+<a class="sourceLine" id="cb21-2" data-line-number="2">  <span class="co">-- get the type of a name-binding</span></a>
+<a class="sourceLine" id="cb21-3" data-line-number="3"><span class="ot">  getType ::</span> <span class="dt">FreshName</span> <span class="ot">-&gt;</span> m <span class="dt">Type</span></a>
+<a class="sourceLine" id="cb21-4" data-line-number="4">  <span class="co">-- get the constructors of a type</span></a>
+<a class="sourceLine" id="cb21-5" data-line-number="5"><span class="ot">  getConstructors ::</span> <span class="dt">Type</span> <span class="ot">-&gt;</span> m [<span class="dt">Constructor</span>]</a>
+<a class="sourceLine" id="cb21-6" data-line-number="6">  <span class="co">-- extend the computation with bindings of names to types</span></a>
+<a class="sourceLine" id="cb21-7" data-line-number="7"><span class="ot">  withTypes ::</span> [(<span class="dt">FreshName</span>, <span class="dt">Type</span>)] <span class="ot">-&gt;</span> m a <span class="ot">-&gt;</span> m a</a>
+<a class="sourceLine" id="cb21-8" data-line-number="8">  <span class="co">-- get a fresh name</span></a>
+<a class="sourceLine" id="cb21-9" data-line-number="9"><span class="ot">  freshName ::</span> m <span class="dt">FreshName</span></a>
+<a class="sourceLine" id="cb21-10" data-line-number="10">  <span class="co">-- fail a coverage check</span></a>
+<a class="sourceLine" id="cb21-11" data-line-number="11"><span class="ot">  coverageError ::</span> <span class="dt">CoverageError</span> <span class="ot">-&gt;</span> m a</a></code></pre></div>
+<p>A coverage-check can fail for the reasons specified in the pseudo-Haskell, but we could also encounter some more &quot;low-level&quot; errors, like malformed patterns, empty types or a failing lookup of types or constructors.</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb22-1" data-line-number="1"><span class="kw">data</span> <span class="dt">CoverageError</span></a>
+<a class="sourceLine" id="cb22-2" data-line-number="2">  <span class="fu">=</span> <span class="dt">RedundantClauses</span> [<span class="dt">ClausePattern</span>]</a>
+<a class="sourceLine" id="cb22-3" data-line-number="3">  <span class="fu">|</span> <span class="dt">CannotCover</span> <span class="dt">IdealPattern</span></a>
+<a class="sourceLine" id="cb22-4" data-line-number="4">  <span class="fu">|</span> <span class="dt">MalformedPattern</span> <span class="dt">ClausePattern</span></a>
+<a class="sourceLine" id="cb22-5" data-line-number="5">  <span class="fu">|</span> <span class="dt">EmptyType</span> <span class="dt">Type</span></a>
+<a class="sourceLine" id="cb22-6" data-line-number="6">  <span class="fu">|</span> <span class="dt">NoTypeFound</span> <span class="dt">FreshName</span></a>
+<a class="sourceLine" id="cb22-7" data-line-number="7">  <span class="fu">|</span> <span class="dt">NoConstructorsFound</span> <span class="dt">Type</span></a>
+<a class="sourceLine" id="cb22-8" data-line-number="8">  <span class="kw">deriving</span> (<span class="dt">Show</span>, <span class="dt">Eq</span>)</a></code></pre></div>
+<p>Since we're associating a number (usages) with each input clause, we'll create a datatype to maintain this association.</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb23-1" data-line-number="1"><span class="kw">data</span> <span class="dt">Clause</span> <span class="fu">=</span> <span class="dt">Clause</span> {<span class="ot"> usages ::</span> <span class="dt">Integer</span>,<span class="ot"> pattern ::</span> <span class="dt">ClausePattern</span> }</a>
+<a class="sourceLine" id="cb23-2" data-line-number="2"></a>
+<a class="sourceLine" id="cb23-3" data-line-number="3"><span class="ot">useClause ::</span> <span class="dt">Clause</span> <span class="ot">-&gt;</span> <span class="dt">Clause</span></a>
+<a class="sourceLine" id="cb23-4" data-line-number="4">useClause br <span class="fu">=</span> br { usages <span class="fu">=</span> usages br <span class="fu">+</span> <span class="dv">1</span> }</a></code></pre></div>
+<p>Looking at the specification, we could make do with a boolean field since we only keep track of the used/not-used state of clauses. I'll stick with the <code>Integer</code> field though, as it could potentially be useful information, for debugging purposes if nothing else.</p>
+<p>With the main plumbing out of the way, we can jump right into the implementation of the <code>coveredBy</code> function, which checks that the patterns are exhaustive and updates the clauses with their number of usages.</p>
+<h1 id="coveredby">coveredBy</h1>
+<div class="sourceCode" id="cb24"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb24-1" data-line-number="1"><span class="co">-- the explicit forall is so we can refer back to `m` in the signature of the</span></a>
+<a class="sourceLine" id="cb24-2" data-line-number="2"><span class="co">-- where-binding</span></a>
+<a class="sourceLine" id="cb24-3" data-line-number="3"><span class="ot">coveredBy ::</span> forall m<span class="fu">.</span> (<span class="dt">Coverage</span> m) <span class="ot">=&gt;</span> <span class="dt">IdealPattern</span> <span class="ot">-&gt;</span> [<span class="dt">Clause</span>] <span class="ot">-&gt;</span> m [<span class="dt">Clause</span>]</a>
+<a class="sourceLine" id="cb24-4" data-line-number="4">coveredBy ideal [] <span class="fu">=</span> coverageError (<span class="dt">CannotCover</span> ideal)</a>
+<a class="sourceLine" id="cb24-5" data-line-number="5">coveredBy ideal (clause <span class="fu">:</span> clauses) <span class="fu">=</span> </a>
+<a class="sourceLine" id="cb24-6" data-line-number="6">  ideal <span class="ot">`hasSubst`</span> pattern clause <span class="fu">&gt;&gt;=</span> \<span class="kw">case</span></a>
+<a class="sourceLine" id="cb24-7" data-line-number="7">    <span class="dt">Nothing</span> <span class="ot">-&gt;</span> </a>
+<a class="sourceLine" id="cb24-8" data-line-number="8">      (clause <span class="fu">:</span>) <span class="fu">&lt;$&gt;</span> coveredBy ideal clauses</a>
+<a class="sourceLine" id="cb24-9" data-line-number="9"></a>
+<a class="sourceLine" id="cb24-10" data-line-number="10">    <span class="dt">Just</span> subst <span class="ot">-&gt;</span></a>
+<a class="sourceLine" id="cb24-11" data-line-number="11">      <span class="kw">case</span> isInjective subst <span class="kw">of</span></a>
+<a class="sourceLine" id="cb24-12" data-line-number="12">        <span class="dt">Injective</span> <span class="ot">-&gt;</span> </a>
+<a class="sourceLine" id="cb24-13" data-line-number="13">          pure (useClause clause <span class="fu">:</span> clauses)</a>
+<a class="sourceLine" id="cb24-14" data-line-number="14"></a>
+<a class="sourceLine" id="cb24-15" data-line-number="15">        <span class="dt">NotInjective</span> binding <span class="ot">-&gt;</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb24-16" data-line-number="16">          typ <span class="ot">&lt;-</span> getType binding</a>
+<a class="sourceLine" id="cb24-17" data-line-number="17">          constructors <span class="ot">&lt;-</span> getConstructors typ</a>
+<a class="sourceLine" id="cb24-18" data-line-number="18">          foldlM (coveredByRefined binding) (clause <span class="fu">:</span> clauses) constructors</a>
+<a class="sourceLine" id="cb24-19" data-line-number="19"></a>
+<a class="sourceLine" id="cb24-20" data-line-number="20">  <span class="kw">where</span></a>
+<a class="sourceLine" id="cb24-21" data-line-number="21"><span class="ot">    coveredByRefined ::</span> <span class="dt">FreshName</span> <span class="ot">-&gt;</span> [<span class="dt">Clause</span>] <span class="ot">-&gt;</span> <span class="dt">Constructor</span> <span class="ot">-&gt;</span> m [<span class="dt">Clause</span>]</a>
+<a class="sourceLine" id="cb24-22" data-line-number="22">    coveredByRefined fname clauses&#39; constructor <span class="fu">=</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb24-23" data-line-number="23">      (refineTo, refinedTypes) <span class="ot">&lt;-</span> constructorToPattern constructor</a>
+<a class="sourceLine" id="cb24-24" data-line-number="24">      <span class="kw">let</span> refined <span class="fu">=</span> apply (<span class="dt">Subst</span> [(fname, refineTo)]) ideal</a>
+<a class="sourceLine" id="cb24-25" data-line-number="25">      withTypes refinedTypes (refined <span class="ot">`coveredBy`</span> clauses&#39;)</a></code></pre></div>
+<p>We update the usages of the clauses by returning them from the function. Even if we do not use a clause, we will still need to return it, so it won't &quot;disappear&quot; from the set of clauses for the next sub-problem. The main divergence from the pseudo-Haskell is the <code>coveredByRefined</code> helper function, which is iterated over the constructors of the type of the binding that we're splitting on. It uses the <code>constructorToPattern</code> function to convert a constructor of a type to a pattern.</p>
+<h1 id="constructortopattern">constructorToPattern</h1>
+<div class="sourceCode" id="cb25"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb25-1" data-line-number="1"><span class="ot">constructorToPattern ::</span> <span class="dt">Coverage</span> m <span class="ot">=&gt;</span> <span class="dt">Constructor</span> <span class="ot">-&gt;</span> m (<span class="dt">IdealPattern</span>, [(<span class="dt">FreshName</span>, <span class="dt">Type</span>)])</a>
+<a class="sourceLine" id="cb25-2" data-line-number="2">constructorToPattern (<span class="dt">Constructor</span> nm args) <span class="fu">=</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb25-3" data-line-number="3">  <span class="kw">let</span> arglen <span class="fu">=</span> length args</a>
+<a class="sourceLine" id="cb25-4" data-line-number="4">  freshNames <span class="ot">&lt;-</span> replicateM arglen freshName</a>
+<a class="sourceLine" id="cb25-5" data-line-number="5">  <span class="kw">let</span> typeAssocs <span class="fu">=</span> zip freshNames args</a>
+<a class="sourceLine" id="cb25-6" data-line-number="6">  pure (<span class="dt">PMatch</span> nm (map <span class="dt">PBind</span> freshNames), typeAssocs)</a></code></pre></div>
+<p>Here we both generate fresh names to stand in for the arguments of the constructor, but we also return a list associating the names to their appropriate types.</p>
+<h1 id="hassubst">hasSubst</h1>
+<p>We also need to know if an ideal pattern can transformed into a covering pattern through a substitution, which we can define as</p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb26-1" data-line-number="1"><span class="ot">hasSubst ::</span> <span class="dt">Coverage</span> m <span class="ot">=&gt;</span> <span class="dt">IdealPattern</span> <span class="ot">-&gt;</span> <span class="dt">ClausePattern</span> <span class="ot">-&gt;</span> m (<span class="dt">Maybe</span> (<span class="dt">Subst</span> <span class="dt">Name</span>))</a>
+<a class="sourceLine" id="cb26-2" data-line-number="2">hasSubst (<span class="dt">PBind</span> x) pat <span class="fu">=</span> pure <span class="fu">.</span> pure <span class="fu">$</span> <span class="dt">Subst</span> [(x, pat)]</a>
+<a class="sourceLine" id="cb26-3" data-line-number="3">hasSubst (<span class="dt">PMatch</span> nm1 pats1) (<span class="dt">PMatch</span> nm2 pats2)</a>
+<a class="sourceLine" id="cb26-4" data-line-number="4">  <span class="fu">|</span> nm1 <span class="fu">/=</span> nm2 <span class="fu">=</span> </a>
+<a class="sourceLine" id="cb26-5" data-line-number="5">      pure <span class="dt">Nothing</span></a>
+<a class="sourceLine" id="cb26-6" data-line-number="6">  <span class="fu">|</span> length pats1 <span class="fu">/=</span> length pats2 <span class="fu">=</span> </a>
+<a class="sourceLine" id="cb26-7" data-line-number="7">      coverageError (<span class="dt">MalformedPattern</span> (<span class="dt">PMatch</span> nm2 pats2))</a>
+<a class="sourceLine" id="cb26-8" data-line-number="8">  <span class="fu">|</span> null pats1 <span class="fu">=</span> pure (<span class="dt">Just</span> mempty)</a>
+<a class="sourceLine" id="cb26-9" data-line-number="9">  <span class="fu">|</span> otherwise <span class="fu">=</span> </a>
+<a class="sourceLine" id="cb26-10" data-line-number="10">      mconcat <span class="fu">&lt;$&gt;</span> (sequence (zipWith hasSubst pats1 pats2))</a>
+<a class="sourceLine" id="cb26-11" data-line-number="11">hasSubst (<span class="dt">PMatch</span> _ _) (<span class="dt">PBind</span> _) <span class="fu">=</span> pure (<span class="dt">Just</span> mempty)</a></code></pre></div>
+<ul>
+<li><span class="math inline">\(x\, \mathsf{hasSubst}\, p\)</span> is always the substitution <span class="math inline">\([x ↦ p]\)</span>.<br />
+</li>
+<li><span class="math inline">\((c\, p_1 \dots p_n)\; \mathsf{hasSubst}\; (c\, p&#39;_1 \dots p&#39;_n)\)</span> is just the concatenation of the substitutions of the sub-patterns.<br />
+</li>
+<li>The last case is somewhat interesting as it says that <span class="math inline">\((c\, p_1 \dots p_n)\; \mathsf{hasSubst}\; x\)</span> is just the empty substitution. This is contrary to Augustsson's method, where this is not true. Instead, the clauses are refined along with the ideal pattern, so such a case does not occur. I could not find a good reason to do this though, so I chose to bake in this notion of generality instead.</li>
+</ul>
+<h1 id="checkcoverage">checkCoverage</h1>
+<p>We can now put the icing on the cake and define the function that actually aplies the coverage checking algorithm!</p>
+<div class="sourceCode" id="cb27"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb27-1" data-line-number="1"><span class="ot">checkCoverage ::</span> <span class="dt">Coverage</span> m <span class="ot">=&gt;</span> <span class="dt">IdealPattern</span> <span class="ot">-&gt;</span> [<span class="dt">ClausePattern</span>] <span class="ot">-&gt;</span> m ()</a>
+<a class="sourceLine" id="cb27-2" data-line-number="2">checkCoverage ideal userpats <span class="fu">=</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb27-3" data-line-number="3">  checkedClausees <span class="ot">&lt;-</span> ideal <span class="ot">`coveredBy`</span> (map asClause userpats) </a>
+<a class="sourceLine" id="cb27-4" data-line-number="4">  <span class="kw">case</span> unusedPatterns checkedClausees <span class="kw">of</span></a>
+<a class="sourceLine" id="cb27-5" data-line-number="5">    [] <span class="ot">-&gt;</span> pure ()</a>
+<a class="sourceLine" id="cb27-6" data-line-number="6">    unreached <span class="ot">-&gt;</span> coverageError <span class="fu">$</span> <span class="dt">RedundantClauses</span> unreached</a>
+<a class="sourceLine" id="cb27-7" data-line-number="7">  <span class="kw">where</span> </a>
+<a class="sourceLine" id="cb27-8" data-line-number="8">    asClause pat <span class="fu">=</span> <span class="dt">Clause</span> { usages <span class="fu">=</span> <span class="dv">0</span>, pattern <span class="fu">=</span> pat }</a>
+<a class="sourceLine" id="cb27-9" data-line-number="9"></a>
+<a class="sourceLine" id="cb27-10" data-line-number="10">    unusedPatterns clauses <span class="fu">=</span> </a>
+<a class="sourceLine" id="cb27-11" data-line-number="11">      <span class="kw">let</span> onlyUnused <span class="fu">=</span> \cl <span class="ot">-&gt;</span> <span class="kw">if</span> usages cl <span class="fu">&lt;</span> <span class="dv">1</span> <span class="kw">then</span> <span class="dt">Just</span> (pattern cl) <span class="kw">else</span> <span class="dt">Nothing</span></a>
+<a class="sourceLine" id="cb27-12" data-line-number="12">      <span class="kw">in</span>  catMaybes (map onlyUnused clauses)</a></code></pre></div>
+<p>It is very like the pseudo-Haskell specification, but with a bit more book-keeping to set up and tear down the state we need.</p>
+<h2 id="testing-our-code">Testing our code</h2>
+<p>Now, we can start working out how to actually run and test our algorithm. We have to start by picking a concrete datatype to implement our <code>Coverage</code> type class.</p>
+<div class="sourceCode" id="cb28"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb28-1" data-line-number="1"><span class="kw">newtype</span> <span class="dt">CoverageM</span> r <span class="fu">=</span> <span class="dt">CoverageM</span> </a>
+<a class="sourceLine" id="cb28-2" data-line-number="2">  {<span class="ot"> unCoverageM ::</span> </a>
+<a class="sourceLine" id="cb28-3" data-line-number="3">      <span class="dt">ExceptT</span> </a>
+<a class="sourceLine" id="cb28-4" data-line-number="4">        <span class="dt">CoverageError</span> </a>
+<a class="sourceLine" id="cb28-5" data-line-number="5">        (<span class="dt">StateT</span> <span class="dt">CoverageState</span> (<span class="dt">Reader</span> <span class="dt">CoverageRead</span>)) r </a>
+<a class="sourceLine" id="cb28-6" data-line-number="6">  }</a>
+<a class="sourceLine" id="cb28-7" data-line-number="7">  <span class="kw">deriving</span> ( <span class="dt">Functor</span></a>
+<a class="sourceLine" id="cb28-8" data-line-number="8">           , <span class="dt">Applicative</span></a>
+<a class="sourceLine" id="cb28-9" data-line-number="9">           , <span class="dt">Monad</span></a>
+<a class="sourceLine" id="cb28-10" data-line-number="10">           , <span class="dt">MonadError</span> <span class="dt">CoverageError</span></a>
+<a class="sourceLine" id="cb28-11" data-line-number="11">           , <span class="dt">MonadState</span> <span class="dt">CoverageState</span></a>
+<a class="sourceLine" id="cb28-12" data-line-number="12">           , <span class="dt">MonadReader</span> <span class="dt">CoverageRead</span></a>
+<a class="sourceLine" id="cb28-13" data-line-number="13">           )</a>
+<a class="sourceLine" id="cb28-14" data-line-number="14"></a>
+<a class="sourceLine" id="cb28-15" data-line-number="15"><span class="kw">data</span> <span class="dt">CoverageRead</span> <span class="fu">=</span> <span class="dt">CoverageRead</span> </a>
+<a class="sourceLine" id="cb28-16" data-line-number="16">  {<span class="ot"> crTypes ::</span> [(<span class="dt">FreshName</span>, <span class="dt">Type</span>)]</a>
+<a class="sourceLine" id="cb28-17" data-line-number="17">  ,<span class="ot"> crConstructors ::</span> [(<span class="dt">Type</span>, [<span class="dt">Constructor</span>])]</a>
+<a class="sourceLine" id="cb28-18" data-line-number="18">  }</a>
+<a class="sourceLine" id="cb28-19" data-line-number="19"></a>
+<a class="sourceLine" id="cb28-20" data-line-number="20"><span class="kw">type</span> <span class="dt">CoverageState</span> <span class="fu">=</span> <span class="dt">Integer</span></a></code></pre></div>
+<p>We use the <code>GeneralizedNewtypeDeriving</code> language extension along with monad transformers to derive a bunch of nifty functionality for us! If you're not familiar with monad transformers, this might look a bit arcane, but it really is just boilerplate. To keep things simple, we again use associative lists where <code>Map</code> might be more appropriate.</p>
+<p>We can now make our <code>CoverageM</code> monad an instance of our <code>Coverage</code> type class, and then define a way to run a computation in our monad.</p>
+<div class="sourceCode" id="cb29"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb29-1" data-line-number="1"><span class="kw">instance</span> <span class="dt">Coverage</span> <span class="dt">CoverageM</span> <span class="kw">where</span></a>
+<a class="sourceLine" id="cb29-2" data-line-number="2">  getType uid <span class="fu">=</span> </a>
+<a class="sourceLine" id="cb29-3" data-line-number="3">    asks crTypes</a>
+<a class="sourceLine" id="cb29-4" data-line-number="4">    <span class="fu">&gt;&gt;=</span> maybe (coverageError <span class="fu">$</span> <span class="dt">NoTypeFound</span> uid) pure <span class="fu">.</span> lookup uid</a>
+<a class="sourceLine" id="cb29-5" data-line-number="5"></a>
+<a class="sourceLine" id="cb29-6" data-line-number="6">  getConstructors typ <span class="fu">=</span> </a>
+<a class="sourceLine" id="cb29-7" data-line-number="7">    asks crConstructors</a>
+<a class="sourceLine" id="cb29-8" data-line-number="8">    <span class="fu">&gt;&gt;=</span> maybe (coverageError <span class="fu">$</span> <span class="dt">NoConstructorsFound</span> typ) noEmptyTypes <span class="fu">.</span> lookup typ</a>
+<a class="sourceLine" id="cb29-9" data-line-number="9">    <span class="kw">where</span></a>
+<a class="sourceLine" id="cb29-10" data-line-number="10">      noEmptyTypes [] <span class="fu">=</span> coverageError (<span class="dt">EmptyType</span> typ)</a>
+<a class="sourceLine" id="cb29-11" data-line-number="11">      noEmptyTypes cs <span class="fu">=</span> pure cs</a>
+<a class="sourceLine" id="cb29-12" data-line-number="12">  </a>
+<a class="sourceLine" id="cb29-13" data-line-number="13">  withTypes types <span class="fu">=</span> local (\r <span class="ot">-&gt;</span> r { crTypes <span class="fu">=</span> types <span class="fu">++</span> crTypes r })</a>
+<a class="sourceLine" id="cb29-14" data-line-number="14">  </a>
+<a class="sourceLine" id="cb29-15" data-line-number="15">  freshName <span class="fu">=</span> get <span class="fu">&gt;&gt;=</span> (\i <span class="ot">-&gt;</span> modify (<span class="fu">+</span><span class="dv">1</span>) <span class="fu">&gt;&gt;</span> pure i)</a>
+<a class="sourceLine" id="cb29-16" data-line-number="16">  </a>
+<a class="sourceLine" id="cb29-17" data-line-number="17">  coverageError <span class="fu">=</span> throwError</a>
+<a class="sourceLine" id="cb29-18" data-line-number="18"></a>
+<a class="sourceLine" id="cb29-19" data-line-number="19">runCoverageM</a>
+<a class="sourceLine" id="cb29-20" data-line-number="20"><span class="ot">  ::</span> <span class="dt">CoverageState</span></a>
+<a class="sourceLine" id="cb29-21" data-line-number="21">  <span class="ot">-&gt;</span> <span class="dt">CoverageRead</span></a>
+<a class="sourceLine" id="cb29-22" data-line-number="22">  <span class="ot">-&gt;</span> <span class="dt">CoverageM</span> a</a>
+<a class="sourceLine" id="cb29-23" data-line-number="23">  <span class="ot">-&gt;</span> (<span class="dt">Either</span> <span class="dt">CoverageError</span> a, <span class="dt">CoverageState</span>)</a>
+<a class="sourceLine" id="cb29-24" data-line-number="24">runCoverageM st rd (<span class="dt">CoverageM</span> x) <span class="fu">=</span> </a>
+<a class="sourceLine" id="cb29-25" data-line-number="25">  runReader (runStateT (runExceptT x) st) rd</a></code></pre></div>
+<p>Finally, we can test our algorithm on some example inputs. Normally, I would use a testing framework like <a href="https://hackage.haskell.org/package/tasty">Tasty</a>, but for this blog post let us just do some quick and dirty testing.</p>
+<div class="sourceCode" id="cb30"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb30-1" data-line-number="1"><span class="ot">test ::</span> <span class="dt">IO</span> ()</a>
+<a class="sourceLine" id="cb30-2" data-line-number="2">test <span class="fu">=</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb30-3" data-line-number="3">  <span class="kw">let</span> tunit <span class="fu">=</span> <span class="dt">TConstr</span> <span class="st">&quot;Unit&quot;</span></a>
+<a class="sourceLine" id="cb30-4" data-line-number="4">  specify <span class="st">&quot;simple tests&quot;</span> <span class="fu">$</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb30-5" data-line-number="5">    <span class="kw">let</span> rd <span class="fu">=</span> <span class="dt">CoverageRead</span> [<span class="dv">0</span> <span class="fu">|-&gt;</span> tunit] [tunit <span class="fu">|-&gt;</span> [<span class="dt">Constructor</span> <span class="st">&quot;MkUnit&quot;</span> []]]</a>
+<a class="sourceLine" id="cb30-6" data-line-number="6"></a>
+<a class="sourceLine" id="cb30-7" data-line-number="7">    runCoverageM <span class="dv">0</span> rd (checkCoverage (<span class="dt">PBind</span> <span class="dv">0</span>) [<span class="dt">PMatch</span> <span class="st">&quot;MkUnit&quot;</span> []])</a>
+<a class="sourceLine" id="cb30-8" data-line-number="8">      <span class="ot">`shouldBe`</span> (<span class="dt">Right</span> (), <span class="dv">0</span>)</a>
+<a class="sourceLine" id="cb30-9" data-line-number="9"></a>
+<a class="sourceLine" id="cb30-10" data-line-number="10">    runCoverageM <span class="dv">0</span> rd (checkCoverage (<span class="dt">PBind</span> <span class="dv">0</span>) [<span class="dt">PMatch</span> <span class="st">&quot;Just&quot;</span> []])</a>
+<a class="sourceLine" id="cb30-11" data-line-number="11">      <span class="ot">`shouldBe`</span> (<span class="dt">Left</span> (<span class="dt">CannotCover</span> (<span class="dt">PMatch</span> <span class="st">&quot;MkUnit&quot;</span> [])), <span class="dv">0</span>)</a>
+<a class="sourceLine" id="cb30-12" data-line-number="12"></a>
+<a class="sourceLine" id="cb30-13" data-line-number="13">    runCoverageM <span class="dv">0</span> rd (checkCoverage (<span class="dt">PBind</span> <span class="dv">0</span>) [<span class="dt">PMatch</span> <span class="st">&quot;MkUnit&quot;</span> [], <span class="dt">PBind</span> <span class="st">&quot;x&quot;</span>])</a>
+<a class="sourceLine" id="cb30-14" data-line-number="14">      <span class="ot">`shouldBe`</span> (<span class="dt">Left</span> (<span class="dt">RedundantClauses</span> [<span class="dt">PBind</span> <span class="st">&quot;x&quot;</span>]), <span class="dv">0</span>)</a>
+<a class="sourceLine" id="cb30-15" data-line-number="15"></a>
+<a class="sourceLine" id="cb30-16" data-line-number="16">  specify <span class="st">&quot;slightly more advanced&quot;</span> <span class="fu">$</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb30-17" data-line-number="17">    <span class="kw">let</span> rd <span class="fu">=</span> <span class="dt">CoverageRead</span> </a>
+<a class="sourceLine" id="cb30-18" data-line-number="18">          [ <span class="dv">0</span> <span class="fu">|-&gt;</span> <span class="dt">TConstr</span> <span class="st">&quot;UnitList&quot;</span> ] </a>
+<a class="sourceLine" id="cb30-19" data-line-number="19">          [ <span class="dt">TConstr</span> <span class="st">&quot;UnitList&quot;</span> <span class="fu">|-&gt;</span> </a>
+<a class="sourceLine" id="cb30-20" data-line-number="20">            [ <span class="dt">Constructor</span> <span class="st">&quot;Nil&quot;</span> []</a>
+<a class="sourceLine" id="cb30-21" data-line-number="21">            , <span class="dt">Constructor</span> <span class="st">&quot;Cons&quot;</span> [tunit, <span class="dt">TConstr</span> <span class="st">&quot;UnitList&quot;</span>]</a>
+<a class="sourceLine" id="cb30-22" data-line-number="22">            ]</a>
+<a class="sourceLine" id="cb30-23" data-line-number="23">          , tunit <span class="fu">|-&gt;</span> [<span class="dt">Constructor</span> <span class="st">&quot;MkUnit&quot;</span> []]</a>
+<a class="sourceLine" id="cb30-24" data-line-number="24">          ]</a>
+<a class="sourceLine" id="cb30-25" data-line-number="25"></a>
+<a class="sourceLine" id="cb30-26" data-line-number="26">    specify <span class="st">&quot;shallow match works&quot;</span> <span class="fu">$</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb30-27" data-line-number="27">      <span class="kw">let</span> branches <span class="fu">=</span> [<span class="dt">PMatch</span> <span class="st">&quot;Cons&quot;</span> [<span class="dt">PBind</span> <span class="st">&quot;x&quot;</span>, <span class="dt">PBind</span> <span class="st">&quot;xs&quot;</span>], <span class="dt">PMatch</span> <span class="st">&quot;Nil&quot;</span> []]</a>
+<a class="sourceLine" id="cb30-28" data-line-number="28">      runCoverageM <span class="dv">0</span> rd (checkCoverage (<span class="dt">PBind</span> <span class="dv">0</span>) branches) <span class="ot">`shouldBe`</span> (<span class="dt">Right</span> (), <span class="dv">2</span>)</a>
+<a class="sourceLine" id="cb30-29" data-line-number="29"></a>
+<a class="sourceLine" id="cb30-30" data-line-number="30">    specify <span class="st">&quot;deep matching on head works&quot;</span> <span class="fu">$</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb30-31" data-line-number="31">      <span class="kw">let</span> branches <span class="fu">=</span> [<span class="dt">PMatch</span> <span class="st">&quot;Cons&quot;</span> [<span class="dt">PMatch</span> <span class="st">&quot;MkUnit&quot;</span> [], <span class="dt">PBind</span> <span class="st">&quot;xs&quot;</span>], <span class="dt">PMatch</span> <span class="st">&quot;Nil&quot;</span> []]</a>
+<a class="sourceLine" id="cb30-32" data-line-number="32">      runCoverageM <span class="dv">0</span> rd (checkCoverage (<span class="dt">PBind</span> <span class="dv">0</span>) branches) <span class="ot">`shouldBe`</span> (<span class="dt">Right</span> (), <span class="dv">2</span>)</a>
+<a class="sourceLine" id="cb30-33" data-line-number="33"></a>
+<a class="sourceLine" id="cb30-34" data-line-number="34">    specify <span class="st">&quot;deep matching on head works&quot;</span> <span class="fu">$</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb30-35" data-line-number="35">      <span class="kw">let</span> branches <span class="fu">=</span> [<span class="dt">PMatch</span> <span class="st">&quot;Cons&quot;</span> [<span class="dt">PMatch</span> <span class="st">&quot;MkUnit&quot;</span> [], <span class="dt">PBind</span> <span class="st">&quot;xs&quot;</span>], <span class="dt">PMatch</span> <span class="st">&quot;Nil&quot;</span> []]</a>
+<a class="sourceLine" id="cb30-36" data-line-number="36">      runCoverageM <span class="dv">0</span> rd (checkCoverage (<span class="dt">PBind</span> <span class="dv">0</span>) branches) <span class="ot">`shouldBe`</span> (<span class="dt">Right</span> (), <span class="dv">2</span>)</a>
+<a class="sourceLine" id="cb30-37" data-line-number="37"></a>
+<a class="sourceLine" id="cb30-38" data-line-number="38">  putStrLn <span class="st">&quot;All tests succeeded&quot;</span></a>
+<a class="sourceLine" id="cb30-39" data-line-number="39">  pure ()</a>
+<a class="sourceLine" id="cb30-40" data-line-number="40">  <span class="kw">where</span></a>
+<a class="sourceLine" id="cb30-41" data-line-number="41"><span class="ot">    specify ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> () <span class="ot">-&gt;</span> <span class="dt">IO</span> ()</a>
+<a class="sourceLine" id="cb30-42" data-line-number="42">    specify <span class="fu">=</span> flip const</a>
+<a class="sourceLine" id="cb30-43" data-line-number="43">    (<span class="fu">!</span>x) <span class="ot">`shouldBe`</span> (<span class="fu">!</span>y)</a>
+<a class="sourceLine" id="cb30-44" data-line-number="44">      <span class="fu">|</span> x <span class="fu">==</span> y <span class="fu">=</span> pure ()</a>
+<a class="sourceLine" id="cb30-45" data-line-number="45">      <span class="fu">|</span> otherwise <span class="fu">=</span> error <span class="fu">$</span> <span class="st">&quot;Expected &quot;</span> <span class="fu">++</span> show x <span class="fu">++</span> <span class="st">&quot; to equal &quot;</span> <span class="fu">++</span> show y</a>
+<a class="sourceLine" id="cb30-46" data-line-number="46">    (<span class="fu">|-&gt;</span>) x y <span class="fu">=</span> (x,y)</a></code></pre></div>
+<p>These tests are hardly exhaustive, but they will do for our purposes. Since this algorithm is quite simple yet has real-world uses, it'd be a fun exercise to write some property-based tests for it, or even to prove some simple properties about it. Off the top of my head, I can think of</p>
+<ul>
+<li>If <code>q</code> is successfully covered by <code>ρ</code>, then duplicating any pattern <code>ρᵢ</code> in <code>ρ</code> will cause a redundant-pattern error with <code>ρᵢ</code>.</li>
+<li>If <code>q</code> is not covered by <code>ρ</code>, we can fix it by inserting a catch-all pattern into the end of <code>ρ</code>.</li>
+<li>If <code>q</code> is covered by <code>ρ</code>, then <code>q `coveredBy` (PBind &quot;x&quot; : ρ)</code> will cause a redundant-pattern error with <code>ρ</code>.</li>
+</ul>
+<p>Furthermore, a space/time complexity analysis of the algorithm should also be an interesting (yet surmountable) task. Haskell's lazy semantics are quite useful, but always provide for extra challenge when attempting to reason about the runtime characteristics of your code.</p>
+<p>That's it for now, thanks for reading!</p>
+    </section>
+</article>
+]]></description>
+    <pubDate>Tue, 29 May 2018 00:00:00 UT</pubDate>
+    <guid>http://adamschoenemann.dk/posts/2018-05-29-pattern-matching.html</guid>
+    <dc:creator>Adam Schønemann</dc:creator>
+</item>
+
+    </channel>
+</rss>

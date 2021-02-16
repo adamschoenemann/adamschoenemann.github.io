@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Adαm Schønemαnn - Derivation trees</title>
+        <link rel="stylesheet" href="../css/adsc-blog.css" />
+        <link rel="stylesheet" href="../css/pygments-default.css" />
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-MML-AM_CHTML"></script>
+    </head>
+    <body>
+        <header>
+            <div class="logo">
+                <a href="../">Adαm Schønemαnn</a>
+            </div>
+            <nav>
+                <a href="../">Home</a>
+                <a href="../about.html">About</a>
+                <a href="../blog.html">Blog</a>
+                <a href="https://github.com/adamschoenemann" target="_blank">GitHub</a>
+                <a href="https://www.linkedin.com/in/adamschoenemann/" target="_blank">LinkedIn</a>
+                <a href="https://lybaek.adamschoenemann.dk/f/91c9ccb33b3d49d9bb66/?dl=1" target="_blank">Resumé</a>
+                <a href="../rss.xml">RSS</a>
+            </nav>
+        </header>
+
+        <main role="main">
+            <h1>Derivation trees</h1>
+            <article>
+    <section class="header">
+        Posted on February 14, 2019
+        
+    </section>
+    <section>
+        <div class="sourceCode" id="cb1"><pre class="sourceCode literate haskell"><code class="sourceCode haskell"><a class="sourceLine" id="cb1-1" data-line-number="1"><span class="ot">{-# LANGUAGE LambdaCase #-}</span></a>
+<a class="sourceLine" id="cb1-2" data-line-number="2"><span class="ot">{-# LANGUAGE GeneralizedNewtypeDeriving #-}</span></a>
+<a class="sourceLine" id="cb1-3" data-line-number="3"><span class="ot">{-# LANGUAGE TypeOperators #-}</span></a>
+<a class="sourceLine" id="cb1-4" data-line-number="4"><span class="ot">{-# LANGUAGE OverloadedStrings #-}</span></a>
+<a class="sourceLine" id="cb1-5" data-line-number="5"><span class="ot">{-# LANGUAGE RecursiveDo #-}</span></a>
+<a class="sourceLine" id="cb1-6" data-line-number="6"><span class="ot">{-# LANGUAGE MultiParamTypeClasses #-}</span></a>
+<a class="sourceLine" id="cb1-7" data-line-number="7"><span class="ot">{-# LANGUAGE ConstraintKinds #-}</span></a>
+<a class="sourceLine" id="cb1-8" data-line-number="8"><span class="ot">{-# LANGUAGE FunctionalDependencies #-}</span></a>
+<a class="sourceLine" id="cb1-9" data-line-number="9"><span class="ot">{-# LANGUAGE FlexibleContexts #-}</span></a>
+<a class="sourceLine" id="cb1-10" data-line-number="10"><span class="ot">{-# LANGUAGE FlexibleInstances #-}</span></a>
+<a class="sourceLine" id="cb1-11" data-line-number="11"><span class="ot">{-# LANGUAGE ScopedTypeVariables #-}</span></a>
+<a class="sourceLine" id="cb1-12" data-line-number="12"></a>
+<a class="sourceLine" id="cb1-13" data-line-number="13"><span class="kw">import</span>           <span class="dt">Data.Map</span> (<span class="dt">Map</span>)</a>
+<a class="sourceLine" id="cb1-14" data-line-number="14"><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">Data.Map</span> <span class="kw">as</span> <span class="dt">M</span></a>
+<a class="sourceLine" id="cb1-15" data-line-number="15"><span class="kw">import</span>           <span class="dt">Control.Monad.State</span></a>
+<a class="sourceLine" id="cb1-16" data-line-number="16"><span class="kw">import</span>           <span class="dt">Control.Monad.Except</span></a>
+<a class="sourceLine" id="cb1-17" data-line-number="17"><span class="kw">import</span>           <span class="dt">Control.Applicative</span> (<span class="dt">Alternative</span>(..))</a>
+<a class="sourceLine" id="cb1-18" data-line-number="18"><span class="kw">import</span>           <span class="dt">Data.Text</span> (<span class="dt">Text</span>)</a>
+<a class="sourceLine" id="cb1-19" data-line-number="19"><span class="kw">import</span>           <span class="dt">Data.Tree</span></a>
+<a class="sourceLine" id="cb1-20" data-line-number="20"><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">Data.Text</span> <span class="kw">as</span> <span class="dt">T</span></a>
+<a class="sourceLine" id="cb1-21" data-line-number="21"><span class="kw">import</span>           <span class="dt">Lens.Micro.Platform</span></a>
+<a class="sourceLine" id="cb1-22" data-line-number="22"></a>
+<a class="sourceLine" id="cb1-23" data-line-number="23"><span class="kw">infixr</span> <span class="dv">2</span> <span class="fu">:-&gt;</span></a>
+<a class="sourceLine" id="cb1-24" data-line-number="24"></a>
+<a class="sourceLine" id="cb1-25" data-line-number="25"><span class="kw">data</span> <span class="dt">Ty</span> <span class="fu">=</span> <span class="dt">Ty</span> <span class="fu">:-&gt;</span> <span class="dt">Ty</span> <span class="fu">|</span> <span class="dt">TyInt</span> <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Show</span>)</a>
+<a class="sourceLine" id="cb1-26" data-line-number="26"></a>
+<a class="sourceLine" id="cb1-27" data-line-number="27"><span class="kw">type</span> <span class="dt">Name</span> <span class="fu">=</span> <span class="dt">Text</span></a>
+<a class="sourceLine" id="cb1-28" data-line-number="28"></a>
+<a class="sourceLine" id="cb1-29" data-line-number="29"><span class="kw">infixl</span> <span class="dv">9</span> <span class="fu">:@:</span></a>
+<a class="sourceLine" id="cb1-30" data-line-number="30"></a>
+<a class="sourceLine" id="cb1-31" data-line-number="31"><span class="kw">data</span> <span class="dt">Exp</span></a>
+<a class="sourceLine" id="cb1-32" data-line-number="32">  <span class="fu">=</span> <span class="dt">Var</span> <span class="dt">Name</span></a>
+<a class="sourceLine" id="cb1-33" data-line-number="33">  <span class="fu">|</span> <span class="dt">Abs</span> (<span class="dt">Name</span>, <span class="dt">Ty</span>) <span class="dt">Exp</span></a>
+<a class="sourceLine" id="cb1-34" data-line-number="34">  <span class="fu">|</span> <span class="dt">Exp</span> <span class="fu">:@:</span> <span class="dt">Exp</span></a>
+<a class="sourceLine" id="cb1-35" data-line-number="35">  <span class="fu">|</span> <span class="dt">Const</span> <span class="dt">Integer</span></a>
+<a class="sourceLine" id="cb1-36" data-line-number="36">  <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Show</span>)</a>
+<a class="sourceLine" id="cb1-37" data-line-number="37"></a>
+<a class="sourceLine" id="cb1-38" data-line-number="38"></a>
+<a class="sourceLine" id="cb1-39" data-line-number="39"><span class="kw">infixr</span> <span class="dv">2</span> <span class="fu">-:&gt;</span></a>
+<a class="sourceLine" id="cb1-40" data-line-number="40"><span class="ot">(-:&gt;) ::</span> (<span class="dt">Name</span>, <span class="dt">Ty</span>) <span class="ot">-&gt;</span> <span class="dt">Exp</span> <span class="ot">-&gt;</span> <span class="dt">Exp</span></a>
+<a class="sourceLine" id="cb1-41" data-line-number="41">(x, t) <span class="fu">-:&gt;</span> e <span class="fu">=</span> <span class="dt">Abs</span> (x, t) e</a>
+<a class="sourceLine" id="cb1-42" data-line-number="42"></a>
+<a class="sourceLine" id="cb1-43" data-line-number="43"><span class="ot">infer ::</span> <span class="dt">Exp</span> <span class="ot">-&gt;</span> <span class="dt">Maybe</span> <span class="dt">Ty</span></a>
+<a class="sourceLine" id="cb1-44" data-line-number="44">infer <span class="fu">=</span> go mempty <span class="kw">where</span></a>
+<a class="sourceLine" id="cb1-45" data-line-number="45">  go ctx <span class="fu">=</span> \<span class="kw">case</span></a>
+<a class="sourceLine" id="cb1-46" data-line-number="46">    <span class="dt">Var</span> x <span class="ot">-&gt;</span> M.lookup x ctx</a>
+<a class="sourceLine" id="cb1-47" data-line-number="47">    e1 <span class="fu">:@:</span> e2 <span class="ot">-&gt;</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb1-48" data-line-number="48">      t1 <span class="fu">:-&gt;</span> t1' <span class="ot">&lt;-</span> go ctx e1</a>
+<a class="sourceLine" id="cb1-49" data-line-number="49">      t2 <span class="ot">&lt;-</span> go ctx e2</a>
+<a class="sourceLine" id="cb1-50" data-line-number="50">      guard (t1 <span class="fu">==</span> t2)</a>
+<a class="sourceLine" id="cb1-51" data-line-number="51">      pure t1'</a>
+<a class="sourceLine" id="cb1-52" data-line-number="52">    <span class="dt">Abs</span> (x, t1) e <span class="ot">-&gt;</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb1-53" data-line-number="53">      t2 <span class="ot">&lt;-</span> go (M.insert x t1 ctx) e</a>
+<a class="sourceLine" id="cb1-54" data-line-number="54">      pure (t1 <span class="fu">:-&gt;</span> t2)</a>
+<a class="sourceLine" id="cb1-55" data-line-number="55">    <span class="dt">Const</span> _i <span class="ot">-&gt;</span> pure <span class="dt">TyInt</span></a>
+<a class="sourceLine" id="cb1-56" data-line-number="56"></a>
+<a class="sourceLine" id="cb1-57" data-line-number="57"></a>
+<a class="sourceLine" id="cb1-58" data-line-number="58"><span class="kw">class</span> <span class="dt">HasDerivationState</span> s a b <span class="fu">|</span> s <span class="ot">-&gt;</span> a, s <span class="ot">-&gt;</span> b <span class="kw">where</span></a>
+<a class="sourceLine" id="cb1-59" data-line-number="59"><span class="ot">  derivationState ::</span> <span class="dt">Lens'</span> s (<span class="dt">Tree</span> (a, b))</a>
+<a class="sourceLine" id="cb1-60" data-line-number="60"></a>
+<a class="sourceLine" id="cb1-61" data-line-number="61"><span class="kw">instance</span> <span class="dt">HasDerivationState</span> (<span class="dt">Tree</span> (a, b)) a b <span class="kw">where</span></a>
+<a class="sourceLine" id="cb1-62" data-line-number="62">  derivationState <span class="fu">=</span> id</a>
+<a class="sourceLine" id="cb1-63" data-line-number="63"></a>
+<a class="sourceLine" id="cb1-64" data-line-number="64"><span class="kw">type</span> <span class="dt">MonadDerivation</span> s m a b <span class="fu">=</span> (<span class="dt">MonadFix</span> m, <span class="dt">MonadState</span> s m, <span class="dt">HasDerivationState</span> s a b)</a>
+<a class="sourceLine" id="cb1-65" data-line-number="65"></a>
+<a class="sourceLine" id="cb1-66" data-line-number="66"><span class="ot">deriveFix ::</span> <span class="dt">MonadDerivation</span> s m a b <span class="ot">=&gt;</span> ((a <span class="ot">-&gt;</span> m b) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> m b) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> m b</a>
+<a class="sourceLine" id="cb1-67" data-line-number="67">deriveFix f <span class="fu">=</span> f (derive (deriveFix f))</a>
+<a class="sourceLine" id="cb1-68" data-line-number="68"></a>
+<a class="sourceLine" id="cb1-69" data-line-number="69"><span class="ot">derive ::</span> <span class="dt">MonadDerivation</span> s m a b <span class="ot">=&gt;</span> (a <span class="ot">-&gt;</span> m b) <span class="ot">-&gt;</span> a <span class="ot">-&gt;</span> m b</a>
+<a class="sourceLine" id="cb1-70" data-line-number="70">derive computation begin <span class="fu">=</span> mdo</a>
+<a class="sourceLine" id="cb1-71" data-line-number="71">  <span class="dt">Node</span> x f <span class="ot">&lt;-</span> use derivationState</a>
+<a class="sourceLine" id="cb1-72" data-line-number="72">  r2 <span class="ot">&lt;-</span> (derivationState <span class="fu">.=</span> <span class="dt">Node</span> (begin, r2) []) <span class="fu">*&gt;</span> computation begin</a>
+<a class="sourceLine" id="cb1-73" data-line-number="73">  b <span class="ot">&lt;-</span> use derivationState</a>
+<a class="sourceLine" id="cb1-74" data-line-number="74">  derivationState <span class="fu">.=</span> <span class="dt">Node</span> x (f <span class="fu">++</span> [b]) <span class="co">-- TODO: bad performance</span></a>
+<a class="sourceLine" id="cb1-75" data-line-number="75">  pure r2</a>
+<a class="sourceLine" id="cb1-76" data-line-number="76"></a>
+<a class="sourceLine" id="cb1-77" data-line-number="77"><span class="kw">type</span> <span class="dt">Ctx</span> <span class="fu">=</span> <span class="dt">Map</span> <span class="dt">Name</span> <span class="dt">Ty</span></a>
+<a class="sourceLine" id="cb1-78" data-line-number="78"></a>
+<a class="sourceLine" id="cb1-79" data-line-number="79"><span class="ot">infer' ::</span> forall s m<span class="fu">.</span> (<span class="dt">Alternative</span> m, <span class="dt">MonadDerivation</span> s m (<span class="dt">Ctx</span>, <span class="dt">Exp</span>) <span class="dt">Ty</span>) <span class="ot">=&gt;</span> <span class="dt">Exp</span> <span class="ot">-&gt;</span> m <span class="dt">Ty</span></a>
+<a class="sourceLine" id="cb1-80" data-line-number="80">infer' expr <span class="fu">=</span> go (mempty, expr) <span class="kw">where</span></a>
+<a class="sourceLine" id="cb1-81" data-line-number="81"><span class="ot">  go ::</span> (<span class="dt">Ctx</span>, <span class="dt">Exp</span>) <span class="ot">-&gt;</span> m <span class="dt">Ty</span></a>
+<a class="sourceLine" id="cb1-82" data-line-number="82">  go (ctx, exp) <span class="fu">=</span> <span class="kw">case</span> exp <span class="kw">of</span></a>
+<a class="sourceLine" id="cb1-83" data-line-number="83">    <span class="dt">Var</span> x <span class="ot">-&gt;</span></a>
+<a class="sourceLine" id="cb1-84" data-line-number="84">     <span class="kw">case</span> M.lookup x ctx <span class="kw">of</span></a>
+<a class="sourceLine" id="cb1-85" data-line-number="85">      <span class="dt">Just</span> t <span class="ot">-&gt;</span> pure t</a>
+<a class="sourceLine" id="cb1-86" data-line-number="86">      <span class="dt">Nothing</span> <span class="ot">-&gt;</span> fail <span class="fu">$</span> <span class="st">&quot;unknown type for &quot;</span> <span class="fu">&lt;&gt;</span> show x</a>
+<a class="sourceLine" id="cb1-87" data-line-number="87">    <span class="dt">Abs</span> (x, t1) e <span class="ot">-&gt;</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb1-88" data-line-number="88">      t2 <span class="ot">&lt;-</span> derive go (M.insert x t1 ctx, e)</a>
+<a class="sourceLine" id="cb1-89" data-line-number="89">      pure (t1 <span class="fu">:-&gt;</span> t2)</a>
+<a class="sourceLine" id="cb1-90" data-line-number="90">    <span class="dt">Const</span> _i <span class="ot">-&gt;</span> pure <span class="dt">TyInt</span></a>
+<a class="sourceLine" id="cb1-91" data-line-number="91">    e1 <span class="fu">:@:</span> e2 <span class="ot">-&gt;</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb1-92" data-line-number="92">      t1 <span class="fu">:-&gt;</span> t1' <span class="ot">&lt;-</span> derive go (ctx, e1)</a>
+<a class="sourceLine" id="cb1-93" data-line-number="93">      t2 <span class="ot">&lt;-</span> derive go (ctx, e2)</a>
+<a class="sourceLine" id="cb1-94" data-line-number="94">      guard (t1 <span class="fu">==</span> t2)</a>
+<a class="sourceLine" id="cb1-95" data-line-number="95">      pure t1'</a>
+<a class="sourceLine" id="cb1-96" data-line-number="96"></a>
+<a class="sourceLine" id="cb1-97" data-line-number="97"></a>
+<a class="sourceLine" id="cb1-98" data-line-number="98"><span class="kw">newtype</span> <span class="dt">CheckM</span> a</a>
+<a class="sourceLine" id="cb1-99" data-line-number="99">  <span class="fu">=</span> <span class="dt">CheckM</span> {<span class="ot"> unCheckM ::</span> <span class="dt">ExceptT</span> <span class="dt">Name</span> (<span class="dt">State</span> (<span class="dt">Tree</span> ((<span class="dt">Ctx</span>, <span class="dt">Exp</span>), <span class="dt">Ty</span>))) a }</a>
+<a class="sourceLine" id="cb1-100" data-line-number="100">  <span class="kw">deriving</span></a>
+<a class="sourceLine" id="cb1-101" data-line-number="101">    ( <span class="dt">Functor</span></a>
+<a class="sourceLine" id="cb1-102" data-line-number="102">    , <span class="dt">Applicative</span></a>
+<a class="sourceLine" id="cb1-103" data-line-number="103">    , <span class="dt">Alternative</span></a>
+<a class="sourceLine" id="cb1-104" data-line-number="104">    , <span class="dt">Monad</span></a>
+<a class="sourceLine" id="cb1-105" data-line-number="105">    , <span class="dt">MonadState</span> (<span class="dt">Tree</span> ((<span class="dt">Ctx</span>, <span class="dt">Exp</span>), <span class="dt">Ty</span>))</a>
+<a class="sourceLine" id="cb1-106" data-line-number="106">    , <span class="dt">MonadFix</span></a>
+<a class="sourceLine" id="cb1-107" data-line-number="107">    , <span class="dt">MonadError</span> <span class="dt">Name</span></a>
+<a class="sourceLine" id="cb1-108" data-line-number="108">    )</a>
+<a class="sourceLine" id="cb1-109" data-line-number="109"></a>
+<a class="sourceLine" id="cb1-110" data-line-number="110"><span class="ot">runCheckM ::</span> <span class="dt">Tree</span> ((<span class="dt">Ctx</span>, <span class="dt">Exp</span>), <span class="dt">Ty</span>) <span class="ot">-&gt;</span> <span class="dt">CheckM</span> a <span class="ot">-&gt;</span> (<span class="dt">Either</span> <span class="dt">Name</span> a, <span class="dt">Tree</span> ((<span class="dt">Ctx</span>, <span class="dt">Exp</span>), <span class="dt">Ty</span>))</a>
+<a class="sourceLine" id="cb1-111" data-line-number="111">runCheckM initState checkM <span class="fu">=</span> runState (runExceptT (unCheckM checkM)) initState</a>
+<a class="sourceLine" id="cb1-112" data-line-number="112"></a>
+<a class="sourceLine" id="cb1-113" data-line-number="113"><span class="ot">runCheckMDerivation ::</span> (<span class="dt">Exp</span> <span class="ot">-&gt;</span> <span class="dt">CheckM</span> <span class="dt">Ty</span>) <span class="ot">-&gt;</span> <span class="dt">Exp</span> <span class="ot">-&gt;</span> (<span class="dt">Either</span> <span class="dt">Name</span> <span class="dt">Ty</span>, <span class="dt">Tree</span> ((<span class="dt">Ctx</span>, <span class="dt">Exp</span>), <span class="dt">Ty</span>))</a>
+<a class="sourceLine" id="cb1-114" data-line-number="114">runCheckMDerivation check init <span class="fu">=</span></a>
+<a class="sourceLine" id="cb1-115" data-line-number="115">  <span class="kw">let</span> (r, final) <span class="fu">=</span> runCheckM (<span class="dt">Node</span> (init, final) []) (check init)</a>
+<a class="sourceLine" id="cb1-116" data-line-number="116">  <span class="kw">in</span>  (r, final)</a>
+<a class="sourceLine" id="cb1-117" data-line-number="117"></a>
+<a class="sourceLine" id="cb1-118" data-line-number="118"><span class="ot">main ::</span> <span class="dt">IO</span> ()</a>
+<a class="sourceLine" id="cb1-119" data-line-number="119">main <span class="fu">=</span> <span class="kw">do</span></a>
+<a class="sourceLine" id="cb1-120" data-line-number="120">  <span class="kw">let</span> (r, tree) <span class="fu">=</span> runCheckMDerivation infer' (<span class="dt">Const</span> <span class="dv">10</span>)</a>
+<a class="sourceLine" id="cb1-121" data-line-number="121">  putStrLn (drawTree <span class="fu">$</span> fmap show tree)</a>
+<a class="sourceLine" id="cb1-122" data-line-number="122">  print r</a></code></pre></div>
+    </section>
+</article>
+
+        </main>
+
+        <footer>
+            Site proudly generated by
+            <a href="http://jaspervdj.be/hakyll">Hakyll</a>
+        </footer>
+    </body>
+</html>
